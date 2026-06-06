@@ -1,0 +1,9 @@
+requests
+httpx
+python-dotenv
+pandas
+numpy
+plotly
+apscheduler
+fastapi
+uvicorn

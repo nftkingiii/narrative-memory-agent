@@ -36,6 +36,7 @@ from agent.memory import (
 from agent.detection import detect_narratives
 from agent.decision import decide_all
 from agent.execution import execute_decision, monitor_open_positions
+from agent.fallback import run_fallback_scan, update_rule_performance
 from agent.writeback import process_closed_trades
 
 
@@ -72,6 +73,7 @@ class AgentState:
         self.active_narrative_day = 0   # days since narrative was first detected
         self.waiting_to_enter = False
         self.days_to_wait = 0
+        self.fallback_signal = None
 
     def to_dict(self) -> dict:
         return {
@@ -140,8 +142,17 @@ def run_cycle():
         detections = detect_narratives(snapshot, memory_query_fn=query_narrative)
         STATE.last_detection = detections
 
+        # Run fallback scan if no narrative detected
+        fallback_signal = None
         if not detections:
-            log.info("  No narratives detected — skipping to monitoring")
+            log.info("  No narratives detected — running fallback scan")
+            fear_greed = snapshot.get("sentiment", {}).get("fear_greed_value")
+            fallback_signal = run_fallback_scan(fear_greed=fear_greed)
+            if fallback_signal:
+                log.info(f"  Fallback signal: {fallback_signal.symbol} | "
+                         f"rule={fallback_signal.rule} | score={fallback_signal.score:.2f}")
+            else:
+                log.info("  No fallback signal found this cycle")
         else:
             log.info(f"  Detected: {[d.narrative_tag for d in detections]}")
 
@@ -152,6 +163,7 @@ def run_cycle():
         if open_trades:
             log.info(f"  {len(open_trades)} open position(s) — skipping new entry")
             STATE.last_decision = None
+            fallback_signal = None
         elif detections:
             decisions = decide_all(detections, snapshot.get("sentiment", {}))
             STATE.last_decision = decisions[0] if decisions else None
@@ -205,6 +217,21 @@ def run_cycle():
             else:
                 remaining = STATE.days_to_wait - STATE.active_narrative_day
                 log.info(f"  Waiting {remaining} more cycle(s) before entry")
+        elif fallback_signal:
+            # Execute fallback strategy signal
+            log.info(f"  Executing fallback: {fallback_signal.symbol} | {fallback_signal.rule}")
+            current_price = fallback_signal.last_price
+
+            trade_id = log_trade(
+                narrative_tag=f"fallback_{fallback_signal.rule}",
+                symbol=fallback_signal.symbol,
+                side="long",
+                entry_price=current_price,
+                position_size=fallback_signal.position_size,
+                memory_informed=False,
+                notes=fallback_signal.reason,
+            )
+            log.info(f"  Fallback trade logged: {fallback_signal.symbol} @ {current_price} "                     f"(id={trade_id})")
         else:
             log.info("  No entry signal this cycle")
 

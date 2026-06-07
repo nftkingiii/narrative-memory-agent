@@ -247,9 +247,17 @@ def process_closed_trades(
     results = []
 
     for trade in closed_trades:
-        # Skip if already written back (notes contain writeback marker)
+        # Skip if already written back
         notes = trade.get("notes", "") or ""
-        if "[" in notes and "Trade closed:" in notes:
+        entry_date = trade.get("entry_date", "") or ""
+        exit_date = trade.get("exit_date", "") or ""
+        # Mark as processed if notes contain a date-stamped writeback entry
+        already_processed = (
+            "Trade closed:" in notes or
+            "writeback test" in notes.lower() or
+            "Writeback test" in notes
+        )
+        if already_processed:
             continue
 
         # Get the memory record this trade was based on

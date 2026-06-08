@@ -3,7 +3,7 @@ nixPkgs = ["python312", "python312Packages.pip", "nodejs_20"]
 
 [phases.install]
 cmds = [
-  "pip3 install -r requirements.txt",
+  "pip3 install -r requirements.txt --break-system-packages",
   "npm install -g bitget-hub",
   "npm install -g @bitget-ai/getagent-skill"
 ]

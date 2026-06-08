@@ -1,0 +1,309 @@
+venue:
+  name: BINANCE
+  account_type: MARGIN
+  oms_type: NETTING
+  starting_balances:
+    - amount: 100000
+      currency: USDT
+
+strategy:
+  module: strategy
+  class: NarrativeMemoryStrategy
+  config_class: NarrativeMemoryStrategyConfig
+  config:
+    order_id_tag: "001"
+    trade_size: "1"
+    lookback_bars: 6
+    momentum_return_pct: 3.0
+    fear_drop_pct: 5.0
+    fear_market_drop_pct: 3.0
+    breakout_volume_multiple: 2.0
+    stop_loss_pct: 3.0
+    base_take_profit_pct: 6.0
+    narrative_mode: "auto"
+
+execution:
+  start: "2026-03-01T00:00:00+00:00"
+  end: "2026-06-07T00:00:00+00:00"
+
+instruments:
+  - id: BTCUSDT.BINANCE
+    kind: perpetual
+    raw_symbol: BTCUSDT
+    base_currency: BTC
+    quote_currency: USDT
+    settlement_currency: USDT
+    price_precision: 4
+    size_precision: 3
+    price_increment: "0.0001"
+    size_increment: "0.001"
+    lot_size: "0.001"
+    maker_fee: "0.0002"
+    taker_fee: "0.0005"
+    bar_type: BTCUSDT.BINANCE-4-HOUR-LAST-EXTERNAL
+  - id: ETHUSDT.BINANCE
+    kind: perpetual
+    raw_symbol: ETHUSDT
+    base_currency: ETH
+    quote_currency: USDT
+    settlement_currency: USDT
+    price_precision: 4
+    size_precision: 3
+    price_increment: "0.0001"
+    size_increment: "0.001"
+    lot_size: "0.001"
+    maker_fee: "0.0002"
+    taker_fee: "0.0005"
+    bar_type: ETHUSDT.BINANCE-4-HOUR-LAST-EXTERNAL
+  - id: SOLUSDT.BINANCE
+    kind: perpetual
+    raw_symbol: SOLUSDT
+    base_currency: SOL
+    quote_currency: USDT
+    settlement_currency: USDT
+    price_precision: 4
+    size_precision: 3
+    price_increment: "0.0001"
+    size_increment: "0.001"
+    lot_size: "0.001"
+    maker_fee: "0.0002"
+    taker_fee: "0.0005"
+    bar_type: SOLUSDT.BINANCE-4-HOUR-LAST-EXTERNAL
+  - id: XRPUSDT.BINANCE
+    kind: perpetual
+    raw_symbol: XRPUSDT
+    base_currency: XRP
+    quote_currency: USDT
+    settlement_currency: USDT
+    price_precision: 4
+    size_precision: 3
+    price_increment: "0.0001"
+    size_increment: "0.001"
+    lot_size: "0.001"
+    maker_fee: "0.0002"
+    taker_fee: "0.0005"
+    bar_type: XRPUSDT.BINANCE-4-HOUR-LAST-EXTERNAL
+  - id: DOGEUSDT.BINANCE
+    kind: perpetual
+    raw_symbol: DOGEUSDT
+    base_currency: DOGE
+    quote_currency: USDT
+    settlement_currency: USDT
+    price_precision: 4
+    size_precision: 3
+    price_increment: "0.0001"
+    size_increment: "0.001"
+    lot_size: "0.001"
+    maker_fee: "0.0002"
+    taker_fee: "0.0005"
+    bar_type: DOGEUSDT.BINANCE-4-HOUR-LAST-EXTERNAL
+  - id: BNBUSDT.BINANCE
+    kind: perpetual
+    raw_symbol: BNBUSDT
+    base_currency: BNB
+    quote_currency: USDT
+    settlement_currency: USDT
+    price_precision: 4
+    size_precision: 3
+    price_increment: "0.0001"
+    size_increment: "0.001"
+    lot_size: "0.001"
+    maker_fee: "0.0002"
+    taker_fee: "0.0005"
+    bar_type: BNBUSDT.BINANCE-4-HOUR-LAST-EXTERNAL
+  - id: ADAUSDT.BINANCE
+    kind: perpetual
+    raw_symbol: ADAUSDT
+    base_currency: ADA
+    quote_currency: USDT
+    settlement_currency: USDT
+    price_precision: 4
+    size_precision: 3
+    price_increment: "0.0001"
+    size_increment: "0.001"
+    lot_size: "0.001"
+    maker_fee: "0.0002"
+    taker_fee: "0.0005"
+    bar_type: ADAUSDT.BINANCE-4-HOUR-LAST-EXTERNAL
+  - id: SUIUSDT.BINANCE
+    kind: perpetual
+    raw_symbol: SUIUSDT
+    base_currency: SUI
+    quote_currency: USDT
+    settlement_currency: USDT
+    price_precision: 4
+    size_precision: 3
+    price_increment: "0.0001"
+    size_increment: "0.001"
+    lot_size: "0.001"
+    maker_fee: "0.0002"
+    taker_fee: "0.0005"
+    bar_type: SUIUSDT.BINANCE-4-HOUR-LAST-EXTERNAL
+  - id: LINKUSDT.BINANCE
+    kind: perpetual
+    raw_symbol: LINKUSDT
+    base_currency: LINK
+    quote_currency: USDT
+    settlement_currency: USDT
+    price_precision: 4
+    size_precision: 3
+    price_increment: "0.0001"
+    size_increment: "0.001"
+    lot_size: "0.001"
+    maker_fee: "0.0002"
+    taker_fee: "0.0005"
+    bar_type: LINKUSDT.BINANCE-4-HOUR-LAST-EXTERNAL
+  - id: AVAXUSDT.BINANCE
+    kind: perpetual
+    raw_symbol: AVAXUSDT
+    base_currency: AVAX
+    quote_currency: USDT
+    settlement_currency: USDT
+    price_precision: 4
+    size_precision: 3
+    price_increment: "0.0001"
+    size_increment: "0.001"
+    lot_size: "0.001"
+    maker_fee: "0.0002"
+    taker_fee: "0.0005"
+    bar_type: AVAXUSDT.BINANCE-4-HOUR-LAST-EXTERNAL
+  - id: TRXUSDT.BINANCE
+    kind: perpetual
+    raw_symbol: TRXUSDT
+    base_currency: TRX
+    quote_currency: USDT
+    settlement_currency: USDT
+    price_precision: 4
+    size_precision: 3
+    price_increment: "0.0001"
+    size_increment: "0.001"
+    lot_size: "0.001"
+    maker_fee: "0.0002"
+    taker_fee: "0.0005"
+    bar_type: TRXUSDT.BINANCE-4-HOUR-LAST-EXTERNAL
+  - id: LTCUSDT.BINANCE
+    kind: perpetual
+    raw_symbol: LTCUSDT
+    base_currency: LTC
+    quote_currency: USDT
+    settlement_currency: USDT
+    price_precision: 4
+    size_precision: 3
+    price_increment: "0.0001"
+    size_increment: "0.001"
+    lot_size: "0.001"
+    maker_fee: "0.0002"
+    taker_fee: "0.0005"
+    bar_type: LTCUSDT.BINANCE-4-HOUR-LAST-EXTERNAL
+  - id: BCHUSDT.BINANCE
+    kind: perpetual
+    raw_symbol: BCHUSDT
+    base_currency: BCH
+    quote_currency: USDT
+    settlement_currency: USDT
+    price_precision: 4
+    size_precision: 3
+    price_increment: "0.0001"
+    size_increment: "0.001"
+    lot_size: "0.001"
+    maker_fee: "0.0002"
+    taker_fee: "0.0005"
+    bar_type: BCHUSDT.BINANCE-4-HOUR-LAST-EXTERNAL
+  - id: DOTUSDT.BINANCE
+    kind: perpetual
+    raw_symbol: DOTUSDT
+    base_currency: DOT
+    quote_currency: USDT
+    settlement_currency: USDT
+    price_precision: 4
+    size_precision: 3
+    price_increment: "0.0001"
+    size_increment: "0.001"
+    lot_size: "0.001"
+    maker_fee: "0.0002"
+    taker_fee: "0.0005"
+    bar_type: DOTUSDT.BINANCE-4-HOUR-LAST-EXTERNAL
+  - id: TONUSDT.BINANCE
+    kind: perpetual
+    raw_symbol: TONUSDT
+    base_currency: TON
+    quote_currency: USDT
+    settlement_currency: USDT
+    price_precision: 4
+    size_precision: 3
+    price_increment: "0.0001"
+    size_increment: "0.001"
+    lot_size: "0.001"
+    maker_fee: "0.0002"
+    taker_fee: "0.0005"
+    bar_type: TONUSDT.BINANCE-4-HOUR-LAST-EXTERNAL
+  - id: UNIUSDT.BINANCE
+    kind: perpetual
+    raw_symbol: UNIUSDT
+    base_currency: UNI
+    quote_currency: USDT
+    settlement_currency: USDT
+    price_precision: 4
+    size_precision: 3
+    price_increment: "0.0001"
+    size_increment: "0.001"
+    lot_size: "0.001"
+    maker_fee: "0.0002"
+    taker_fee: "0.0005"
+    bar_type: UNIUSDT.BINANCE-4-HOUR-LAST-EXTERNAL
+  - id: AAVEUSDT.BINANCE
+    kind: perpetual
+    raw_symbol: AAVEUSDT
+    base_currency: AAVE
+    quote_currency: USDT
+    settlement_currency: USDT
+    price_precision: 4
+    size_precision: 3
+    price_increment: "0.0001"
+    size_increment: "0.001"
+    lot_size: "0.001"
+    maker_fee: "0.0002"
+    taker_fee: "0.0005"
+    bar_type: AAVEUSDT.BINANCE-4-HOUR-LAST-EXTERNAL
+  - id: NEARUSDT.BINANCE
+    kind: perpetual
+    raw_symbol: NEARUSDT
+    base_currency: NEAR
+    quote_currency: USDT
+    settlement_currency: USDT
+    price_precision: 4
+    size_precision: 3
+    price_increment: "0.0001"
+    size_increment: "0.001"
+    lot_size: "0.001"
+    maker_fee: "0.0002"
+    taker_fee: "0.0005"
+    bar_type: NEARUSDT.BINANCE-4-HOUR-LAST-EXTERNAL
+  - id: FILUSDT.BINANCE
+    kind: perpetual
+    raw_symbol: FILUSDT
+    base_currency: FIL
+    quote_currency: USDT
+    settlement_currency: USDT
+    price_precision: 4
+    size_precision: 3
+    price_increment: "0.0001"
+    size_increment: "0.001"
+    lot_size: "0.001"
+    maker_fee: "0.0002"
+    taker_fee: "0.0005"
+    bar_type: FILUSDT.BINANCE-4-HOUR-LAST-EXTERNAL
+  - id: ETCUSDT.BINANCE
+    kind: perpetual
+    raw_symbol: ETCUSDT
+    base_currency: ETC
+    quote_currency: USDT
+    settlement_currency: USDT
+    price_precision: 4
+    size_precision: 3
+    price_increment: "0.0001"
+    size_increment: "0.001"
+    lot_size: "0.001"
+    maker_fee: "0.0002"
+    taker_fee: "0.0005"
+    bar_type: ETCUSDT.BINANCE-4-HOUR-LAST-EXTERNAL

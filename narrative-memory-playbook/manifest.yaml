@@ -1,0 +1,114 @@
+name: narrative-memory-momentum
+display_name: "Narrative Memory Momentum"
+version: "1.0.0"
+description: "Paper-trading crypto momentum scanner that blends narrative regime memory with fallback market rules."
+long_description: |
+  This Playbook is a long-only crypto momentum strategy for liquid USDT perpetual markets. Its thesis is that major market stories often create clustered price behavior: once a theme becomes visible, related assets can keep attracting flow longer than a plain chart signal would imply. The strategy aims to capture that behavior while retaining a fallback scanner for periods when no strong story proxy is present. It treats narrative memory as a risk and timing overlay rather than as open-ended discretion, so the same decision path can be replayed in historical evaluation.
+
+  The Playbook enters long when market action suggests that a theme-linked asset is moving with confirming participation, or when the fallback scanner finds a strong momentum, recovery, or breakout setup across the configured symbol universe. Narrative memory influences how selective the Playbook is and how much conviction it assigns, based on prior regime labels declared in the package configuration. When the narrative layer is quiet, the fallback rules keep scanning price action, volume behavior, and market fear context for cleaner paper-trade opportunities.
+
+  Exits are controlled by stop and take profit logic. The strategy closes a paper position when the move has failed enough to invalidate the setup, when the configured profit objective has been reached, or when a stronger symbol takes priority after the current position is flat. Take profit behavior expands or contracts with the remembered character of the active narrative, while stop behavior remains deliberately defensive so failed stories do not become open-ended losses.
+
+  Subscribers can adjust several tunable parameters. Trading symbols define the universe being scanned; widening the list can find more setups but may also add noisier assets. Leverage amplifies both upside and drawdown without improving signal quality. Margin budget controls the capital denominator used for strategy-level returns. Narrative mode changes whether the memory overlay is active or the fallback scanner dominates. Sensitivity parameters alter how quickly the Playbook reacts to momentum, fear recovery, and breakout behavior.
+
+  The main risk is that narratives can fade suddenly, rotate into different assets, or produce late entries after the easiest part of the move has already passed. The strategy can underperform in choppy markets, thin liquidity, exchange-specific dislocations, or news gaps where price moves faster than paper signals can react. Historical backtest results are not a guarantee of live profitability, and this Playbook is intended for paper signal evaluation before any operational use.
+market_type: contract
+trading_symbols: ["BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT", "BNBUSDT", "ADAUSDT", "SUIUSDT", "LINKUSDT", "AVAXUSDT", "TRXUSDT", "LTCUSDT", "BCHUSDT", "DOTUSDT", "TONUSDT", "UNIUSDT", "AAVEUSDT", "NEARUSDT", "FILUSDT", "ETCUSDT"]
+tags: ["narrative", "momentum", "memory", "crypto", "paper"]
+schedule:
+  cron: "0 */4 * * *"
+  tz: "Asia/Shanghai"
+decision_mode: deterministic
+backtest_support: full
+runtime_profile: deterministic
+execution_mode: signal_only
+follow_trade_supported: false
+
+strategy_config:
+  trading_symbols: ["BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT", "BNBUSDT", "ADAUSDT", "SUIUSDT", "LINKUSDT", "AVAXUSDT", "TRXUSDT", "LTCUSDT", "BCHUSDT", "DOTUSDT", "TONUSDT", "UNIUSDT", "AAVEUSDT", "NEARUSDT", "FILUSDT", "ETCUSDT"]
+  narrative_mode: "auto"
+  active_narratives: ["ai", "rwa", "meme", "depin"]
+  leverage: 3
+  margin_budget: "100"
+  trade_size: "1"
+  lookback_bars: 6
+  momentum_return_pct: 3.0
+  fear_drop_pct: 5.0
+  fear_market_drop_pct: 3.0
+  breakout_volume_multiple: 2.0
+  stop_loss_pct: 3.0
+  base_take_profit_pct: 6.0
+  max_backtest_symbols: 20
+  backtest_batch_size: 5
+  backtest_batch_sleep_seconds: 0
+
+user_config_schema:
+  trading_symbols:
+    type: array
+    item_type: string
+    default: ["BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT", "BNBUSDT", "ADAUSDT", "SUIUSDT", "LINKUSDT", "AVAXUSDT", "TRXUSDT", "LTCUSDT", "BCHUSDT", "DOTUSDT", "TONUSDT", "UNIUSDT", "AAVEUSDT", "NEARUSDT", "FILUSDT", "ETCUSDT"]
+    options: ["BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT", "BNBUSDT", "ADAUSDT", "SUIUSDT", "LINKUSDT", "AVAXUSDT", "TRXUSDT", "LTCUSDT", "BCHUSDT", "DOTUSDT", "TONUSDT", "UNIUSDT", "AAVEUSDT", "NEARUSDT", "FILUSDT", "ETCUSDT"]
+    aliases:
+      btc: BTCUSDT
+      bitcoin: BTCUSDT
+      eth: ETHUSDT
+      ethereum: ETHUSDT
+      sol: SOLUSDT
+      solana: SOLUSDT
+      bnb: BNBUSDT
+      xrp: XRPUSDT
+      doge: DOGEUSDT
+      chainlink: LINKUSDT
+      sui: SUIUSDT
+      avax: AVAXUSDT
+      tron: TRXUSDT
+      litecoin: LTCUSDT
+      bitcoin-cash: BCHUSDT
+      polkadot: DOTUSDT
+      ton: TONUSDT
+      uniswap: UNIUSDT
+      aave: AAVEUSDT
+      near: NEARUSDT
+      filecoin: FILUSDT
+      ethereum-classic: ETCUSDT
+    min_items: 1
+    max_items: 20
+    label: "Trading symbols"
+  narrative_mode:
+    type: string
+    default: "auto"
+    options: ["auto", "force_ai", "force_rwa", "force_meme", "force_depin", "fallback_only"]
+    label: "Narrative mode"
+  leverage:
+    type: integer
+    default: 3
+    min: 1
+    max: 10
+    aliases:
+      3x: 3
+      5x: 5
+      10x: 10
+    label: "Leverage"
+  margin_budget:
+    type: string
+    default: "100"
+    pattern: "^[0-9]+(\\.[0-9]+)?$"
+    label: "Margin budget USDT"
+  momentum_return_pct:
+    type: number
+    default: 3.0
+    min: 1.0
+    max: 10.0
+    label: "Momentum sensitivity"
+  fear_drop_pct:
+    type: number
+    default: 5.0
+    min: 2.0
+    max: 15.0
+    label: "Fear bounce sensitivity"
+  breakout_volume_multiple:
+    type: number
+    default: 2.0
+    min: 1.2
+    max: 5.0
+    label: "Breakout volume sensitivity"

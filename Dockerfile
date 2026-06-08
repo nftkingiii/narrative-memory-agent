@@ -18,5 +18,5 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy project
 COPY . .
 
-# Start both agent and dashboard
-CMD python3 main.py & python3 -m uvicorn dashboard.app:app --host 0.0.0.0 --port $PORT
+# Start dashboard first (so Railway health check passes), then agent
+CMD python3 -m uvicorn dashboard.app:app --host 0.0.0.0 --port $PORT & python3 main.py & wait

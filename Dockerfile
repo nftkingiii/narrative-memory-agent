@@ -13,6 +13,5 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
-RUN chmod +x start.sh
 
-ENTRYPOINT ["/bin/bash", "start.sh"]
+ENTRYPOINT ["/bin/bash", "-c", "python3 -m uvicorn dashboard.app:app --host 0.0.0.0 --port 8000 & python3 main.py & wait"]

@@ -1,4 +1,5 @@
 #!/bin/bash
+export PATH="/root/.npm-global/bin:/usr/local/lib/node_modules/.bin:$PATH"
 APP_PORT="${PORT:-8000}"
 echo "Starting uvicorn on port $APP_PORT"
 python3 -m uvicorn dashboard.app:app --host 0.0.0.0 --port "$APP_PORT" &

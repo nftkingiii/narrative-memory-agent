@@ -160,8 +160,11 @@ def run_cycle():
         log.info("Step 3: Decision")
         open_trades = get_trade_log(status="open")
 
-        if open_trades:
-            log.info(f"  {len(open_trades)} open position(s) — skipping new entry")
+        MAX_POSITIONS = 3
+        open_symbols = [t["symbol"] for t in open_trades]
+
+        if len(open_trades) >= MAX_POSITIONS:
+            log.info(f"  {len(open_trades)} open position(s) — max {MAX_POSITIONS} reached, skipping")
             STATE.last_decision = None
             fallback_signal = None
         elif detections:
@@ -170,6 +173,17 @@ def run_cycle():
 
             if STATE.last_decision and STATE.last_decision.should_enter:
                 d = STATE.last_decision
+                # Skip if already in this symbol
+                if d.symbol in open_symbols:
+                    log.info(f"  Already have open position in {d.symbol} — skipping")
+                    STATE.last_decision = None
+                    d = None
+                # Cap size based on concurrent open positions
+                if d:
+                    if len(open_trades) >= 2:
+                        d.position_size = "small"
+                    elif len(open_trades) == 1 and d.position_size == "full":
+                        d.position_size = "medium"
 
                 # Track narrative entry timing
                 if STATE.active_narrative != d.narrative_tag:
@@ -217,7 +231,7 @@ def run_cycle():
             else:
                 remaining = STATE.days_to_wait - STATE.active_narrative_day
                 log.info(f"  Waiting {remaining} more cycle(s) before entry")
-        elif fallback_signal:
+        elif fallback_signal and fallback_signal.symbol not in open_symbols:
             # Execute fallback strategy signal
             log.info(f"  Executing fallback: {fallback_signal.symbol} | {fallback_signal.rule}")
             current_price = fallback_signal.last_price

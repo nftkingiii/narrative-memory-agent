@@ -132,6 +132,9 @@ def execute_decision(decision, memory_log_fn=None) -> dict | None:
             position_size=decision.position_size,
             memory_informed=decision.memory_informed,
             notes=decision.reason,
+            stop_loss_price=order["stop_loss_price"],
+            take_profit_price=order["take_profit_price"],
+            trade_type="narrative",
         )
         order["trade_id"] = trade_id
         print(f"[execution] Trade logged to SQLite (id={trade_id})")
@@ -150,9 +153,7 @@ def monitor_open_positions(close_trade_fn=None) -> list[dict]:
     Closes positions that hit stop loss or take profit.
     Returns list of closed trade records.
     """
-    from agent.memory import get_trade_log
-    import sqlite3
-    from pathlib import Path
+    from agent.memory import get_trade_log, update_trade_mark
 
     open_trades = get_trade_log(status="open")
     if not open_trades:
@@ -174,18 +175,21 @@ def monitor_open_positions(close_trade_fn=None) -> list[dict]:
             pnl_pct = (current_price - entry_price) / entry_price * 100
         else:
             pnl_pct = (entry_price - current_price) / entry_price * 100
-
-        # Check exit conditions
-        # Get stop loss and take profit from notes (stored at trade log time)
-        # Default thresholds if not recoverable
-        stop_loss_pct  = -3.0
-        take_profit_pct = 20.0
+        update_trade_mark(trade["id"], current_price, pnl_pct)
 
         exit_reason = None
-        if pnl_pct <= stop_loss_pct:
-            exit_reason = "stop_loss"
-        elif pnl_pct >= take_profit_pct:
-            exit_reason = "take_profit"
+        stop_price = trade.get("stop_loss_price")
+        take_price = trade.get("take_profit_price")
+        if side == "long":
+            if stop_price is not None and current_price <= stop_price:
+                exit_reason = "stop_loss"
+            elif take_price is not None and current_price >= take_price:
+                exit_reason = "take_profit"
+        else:
+            if stop_price is not None and current_price >= stop_price:
+                exit_reason = "stop_loss"
+            elif take_price is not None and current_price <= take_price:
+                exit_reason = "take_profit"
 
         print(f"[execution] {symbol:12s} entry={entry_price} "
               f"current={current_price} PnL={pnl_pct:+.2f}% "

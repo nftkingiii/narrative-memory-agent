@@ -25,7 +25,10 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Add project root to path
-sys.path.insert(0, str(Path(__file__).parent))
+PROJECT_ROOT = Path(__file__).parent
+DATA_DIR = Path(os.getenv("DATA_DIR", PROJECT_ROOT / "data"))
+LOG_DIR = Path(os.getenv("LOG_DIR", PROJECT_ROOT / "logs"))
+sys.path.insert(0, str(PROJECT_ROOT))
 
 from agent.perception import get_full_snapshot
 from agent.memory import (
@@ -36,7 +39,11 @@ from agent.memory import (
 from agent.detection import detect_narratives
 from agent.decision import decide_all
 from agent.execution import execute_decision, monitor_open_positions
-from agent.fallback import run_fallback_scan, update_rule_performance
+from agent.fallback import (
+    record_fallback_entry,
+    run_fallback_scan,
+    update_rule_performance,
+)
 from agent.writeback import process_closed_trades
 
 
@@ -44,7 +51,7 @@ from agent.writeback import process_closed_trades
 # Logging Setup
 # ─────────────────────────────────────────────
 
-LOG_PATH = Path("logs/agent.log")
+LOG_PATH = LOG_DIR / "agent.log"
 LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 logging.basicConfig(
@@ -93,7 +100,46 @@ STATE = AgentState()
 # Save State to JSON (for dashboard)
 # ─────────────────────────────────────────────
 
-STATE_PATH = Path("data/agent_state.json")
+STATE_PATH = DATA_DIR / "agent_state.json"
+
+
+def restore_state():
+    """Restore cycle and narrative timing state after a restart."""
+    if not STATE_PATH.exists():
+        return
+    try:
+        saved = json.loads(STATE_PATH.read_text(encoding="utf-8"))
+        for key in (
+            "cycle_count",
+            "active_narrative",
+            "active_narrative_day",
+            "waiting_to_enter",
+            "days_to_wait",
+        ):
+            if key in saved:
+                setattr(STATE, key, saved[key])
+    except (OSError, ValueError, TypeError) as exc:
+        log.warning(f"Could not restore agent state: {exc}")
+
+
+def partition_open_trades(open_trades: list[dict]) -> tuple[list[dict], list[dict]]:
+    """Split open positions into the reserved narrative and fallback lanes."""
+    narrative_trades = []
+    fallback_trades = []
+    for trade in open_trades:
+        trade_type = trade.get("trade_type")
+        if not trade_type:
+            trade_type = (
+                "fallback"
+                if trade.get("narrative_tag", "").startswith("fallback_")
+                else "narrative"
+            )
+        if trade_type == "fallback":
+            fallback_trades.append(trade)
+        else:
+            narrative_trades.append(trade)
+    return narrative_trades, fallback_trades
+
 
 def save_state(extra: dict = None):
     """Save current agent state to JSON for dashboard consumption."""
@@ -142,32 +188,25 @@ def run_cycle():
         detections = detect_narratives(snapshot, memory_query_fn=query_narrative)
         STATE.last_detection = detections
 
-        # Run fallback scan if no narrative detected
-        fallback_signal = None
-        if not detections:
-            log.info("  No narratives detected — running fallback scan")
-            fear_greed = snapshot.get("sentiment", {}).get("fear_greed_value")
-            fallback_signal = run_fallback_scan(fear_greed=fear_greed)
-            if fallback_signal:
-                log.info(f"  Fallback signal: {fallback_signal.symbol} | "
-                         f"rule={fallback_signal.rule} | score={fallback_signal.score:.2f}")
-            else:
-                log.info("  No fallback signal found this cycle")
-        else:
+        if detections:
             log.info(f"  Detected: {[d.narrative_tag for d in detections]}")
+        else:
+            log.info("  No narratives detected")
 
         # ── Step 3: Decision ─────────────────────────────
         log.info("Step 3: Decision")
         open_trades = get_trade_log(status="open")
 
         MAX_POSITIONS = 3
+        MAX_NARRATIVE_POSITIONS = 1
+        MAX_FALLBACK_POSITIONS = 2
         open_symbols = [t["symbol"] for t in open_trades]
+        narrative_trades, fallback_trades = partition_open_trades(open_trades)
 
         if len(open_trades) >= MAX_POSITIONS:
             log.info(f"  {len(open_trades)} open position(s) — max {MAX_POSITIONS} reached, skipping")
             STATE.last_decision = None
-            fallback_signal = None
-        elif detections:
+        elif detections and len(narrative_trades) < MAX_NARRATIVE_POSITIONS:
             decisions = decide_all(detections, snapshot.get("sentiment", {}))
             STATE.last_decision = decisions[0] if decisions else None
 
@@ -186,7 +225,7 @@ def run_cycle():
                         d.position_size = "medium"
 
                 # Track narrative entry timing
-                if STATE.active_narrative != d.narrative_tag:
+                if d and STATE.active_narrative != d.narrative_tag:
                     STATE.active_narrative = d.narrative_tag
                     STATE.active_narrative_day = 0
                     STATE.waiting_to_enter = d.days_to_wait > 0
@@ -204,12 +243,38 @@ def run_cycle():
                         btc_dominance=snapshot.get("market_intel", {}).get("btc_dominance"),
                         notes=f"Detected by agent cycle {STATE.cycle_count}",
                     )
-                else:
+                elif d:
                     STATE.active_narrative_day += 1
                     log.info(f"  Narrative day {STATE.active_narrative_day} / "
                              f"wait {STATE.days_to_wait}")
         else:
             STATE.last_decision = None
+            if detections and narrative_trades:
+                log.info("  Narrative slot occupied; monitoring the existing narrative trade")
+
+        fallback_signal = None
+        if (
+            len(open_trades) < MAX_POSITIONS
+            and len(fallback_trades) < MAX_FALLBACK_POSITIONS
+        ):
+            log.info(
+                f"  Fallback capacity: {len(fallback_trades)}/{MAX_FALLBACK_POSITIONS}; "
+                "running scout"
+            )
+            fear_greed = snapshot.get("sentiment", {}).get("fear_greed_value")
+            fallback_signal = run_fallback_scan(
+                fear_greed=fear_greed,
+                open_trades=open_trades,
+            )
+            if fallback_signal:
+                log.info(f"  Fallback signal: {fallback_signal.symbol} | "
+                         f"rule={fallback_signal.rule} | score={fallback_signal.score:.2f}")
+            else:
+                log.info("  No fallback signal found this cycle")
+        else:
+            log.info(
+                f"  Fallback slots full: {len(fallback_trades)}/{MAX_FALLBACK_POSITIONS}"
+            )
 
         # ── Step 4: Execution ────────────────────────────
         log.info("Step 4: Execution")
@@ -231,10 +296,16 @@ def run_cycle():
             else:
                 remaining = STATE.days_to_wait - STATE.active_narrative_day
                 log.info(f"  Waiting {remaining} more cycle(s) before entry")
-        elif fallback_signal and fallback_signal.symbol not in open_symbols:
+        if fallback_signal and fallback_signal.symbol not in open_symbols:
             # Execute fallback strategy signal
             log.info(f"  Executing fallback: {fallback_signal.symbol} | {fallback_signal.rule}")
             current_price = fallback_signal.last_price
+            stop_loss_price = round(
+                current_price * (1 - fallback_signal.stop_loss_pct / 100), 8
+            )
+            take_profit_price = round(
+                current_price * (1 + fallback_signal.take_profit_pct / 100), 8
+            )
 
             trade_id = log_trade(
                 narrative_tag=f"fallback_{fallback_signal.rule}",
@@ -244,9 +315,16 @@ def run_cycle():
                 position_size=fallback_signal.position_size,
                 memory_informed=False,
                 notes=fallback_signal.reason,
+                stop_loss_price=stop_loss_price,
+                take_profit_price=take_profit_price,
+                trade_type="fallback",
             )
-            log.info(f"  Fallback trade logged: {fallback_signal.symbol} @ {current_price} "                     f"(id={trade_id})")
-        else:
+            record_fallback_entry()
+            log.info(
+                f"  Fallback trade logged: {fallback_signal.symbol} @ "
+                f"{current_price} (id={trade_id})"
+            )
+        elif not (STATE.last_decision and STATE.last_decision.should_enter):
             log.info("  No entry signal this cycle")
 
         # ── Step 5: Monitor Open Positions ───────────────
@@ -293,6 +371,23 @@ def run_cycle():
         save_state({"last_error": str(e)})
 
 
+def monitor_positions_job():
+    """Refresh marks and enforce exits independently of the hourly scan."""
+    try:
+        open_count = len(get_trade_log(status="open"))
+        if not open_count:
+            return
+        log.info(f"Live monitor: refreshing {open_count} open position(s)")
+        closed = monitor_open_positions(close_trade_fn=close_trade)
+        for trade in closed:
+            log.info(
+                f"Live monitor closed {trade['symbol']} "
+                f"{trade['exit_reason']} PnL={trade['pnl_pct']:.2f}%"
+            )
+    except Exception:
+        log.exception("Live position monitor failed")
+
+
 # ─────────────────────────────────────────────
 # Entry Point
 # ─────────────────────────────────────────────
@@ -300,10 +395,11 @@ def run_cycle():
 def main():
     log.info("Narrative Memory Agent starting...")
     log.info(f"   Log: {LOG_PATH}")
-    log.info(f"   DB:  data/memory.db")
+    log.info(f"   DB:  {DATA_DIR / 'memory.db'}")
 
     # Init DB
     init_db()
+    restore_state()
 
     # Run one immediate cycle
     log.info("Running initial cycle...")
@@ -317,6 +413,17 @@ def main():
         id="agent_cycle",
         name="Narrative Memory Agent Cycle",
         misfire_grace_time=300,
+        max_instances=1,
+        coalesce=True,
+    )
+    scheduler.add_job(
+        monitor_positions_job,
+        trigger=IntervalTrigger(minutes=1),
+        id="position_monitor",
+        name="Live Position Monitor",
+        misfire_grace_time=30,
+        max_instances=1,
+        coalesce=True,
     )
 
     log.info("Scheduler started — running every hour. Press Ctrl+C to stop.")

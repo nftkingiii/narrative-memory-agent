@@ -22,8 +22,10 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-CONFIG_PATH  = Path("data/strategy_config.json")
-CIRCUIT_PATH = Path("data/circuit_breaker.json")
+PROJECT_ROOT = Path(__file__).parent.parent
+DATA_DIR = Path(os.getenv("DATA_DIR", PROJECT_ROOT / "data"))
+CONFIG_PATH  = DATA_DIR / "strategy_config.json"
+CIRCUIT_PATH = DATA_DIR / "circuit_breaker.json"
 
 STARTING_BALANCE    = 10_000.0
 MAX_DAILY_LOSS_USD  = 300.0     # circuit breaker trips at -$300/day
@@ -131,6 +133,15 @@ def save_config(config: dict):
     CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
     with open(CONFIG_PATH, "w") as f:
         json.dump(config, f, indent=2)
+
+
+def record_fallback_entry():
+    """Persist cooldown and daily trade counters after a fallback entry."""
+    config = reset_daily_stats_if_needed(load_config())
+    stats = config["daily_stats"]
+    stats["last_trade_time"] = datetime.now(timezone.utc).isoformat()
+    stats["trades"] = stats.get("trades", 0) + 1
+    save_config(config)
 
 
 def reset_daily_stats_if_needed(config: dict) -> dict:

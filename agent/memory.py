@@ -5,13 +5,16 @@ Stores historical narrative cycles, queries for matches,
 and writes back outcomes after trades close.
 """
 
+import os
 import sqlite3
 import json
 from datetime import datetime, timezone
 from pathlib import Path
 
 
-DB_PATH = Path(__file__).parent.parent / "data" / "memory.db"
+PROJECT_ROOT = Path(__file__).parent.parent
+DATA_DIR = Path(os.getenv("DATA_DIR", PROJECT_ROOT / "data"))
+DB_PATH = DATA_DIR / "memory.db"
 
 
 # ─────────────────────────────────────────────
@@ -51,6 +54,12 @@ CREATE TABLE IF NOT EXISTS trade_log (
     exit_price          REAL,
     position_size       TEXT CHECK(position_size IN ('small','medium','full')),
     pnl_pct             REAL,
+    current_price       REAL,
+    unrealized_pnl_pct  REAL,
+    stop_loss_price     REAL,
+    take_profit_price   REAL,
+    last_price_at       TEXT,
+    trade_type          TEXT CHECK(trade_type IN ('narrative','fallback')),
     exit_reason         TEXT CHECK(exit_reason IN ('take_profit','stop_loss','memory_exit','manual')),
     memory_informed     INTEGER DEFAULT 0,
     status              TEXT CHECK(status IN ('open','closed')) DEFAULT 'open',
@@ -155,15 +164,80 @@ SEED_NARRATIVES = [
 def get_connection() -> sqlite3.Connection:
     """Return a SQLite connection with row factory enabled."""
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=30000")
     return conn
+
+
+def _migrate_trade_log(conn: sqlite3.Connection):
+    """Add live-tracking fields to existing deployments without losing trades."""
+    columns = {
+        row["name"] for row in conn.execute("PRAGMA table_info(trade_log)").fetchall()
+    }
+    additions = {
+        "current_price": "REAL",
+        "unrealized_pnl_pct": "REAL",
+        "stop_loss_price": "REAL",
+        "take_profit_price": "REAL",
+        "last_price_at": "TEXT",
+        "trade_type": "TEXT",
+    }
+    for name, column_type in additions.items():
+        if name not in columns:
+            conn.execute(f"ALTER TABLE trade_log ADD COLUMN {name} {column_type}")
+
+    conn.execute("""
+        UPDATE trade_log
+        SET trade_type = CASE
+            WHEN narrative_tag LIKE 'fallback_%' THEN 'fallback'
+            ELSE 'narrative'
+        END
+        WHERE trade_type IS NULL
+    """)
+    conn.execute("""
+        UPDATE trade_log
+        SET current_price = entry_price,
+            unrealized_pnl_pct = COALESCE(unrealized_pnl_pct, 0),
+            stop_loss_price = COALESCE(
+                stop_loss_price,
+                CASE
+                    WHEN side = 'short' THEN entry_price * 1.03
+                    ELSE entry_price * 0.97
+                END
+            ),
+            take_profit_price = COALESCE(
+                take_profit_price,
+                CASE
+                    WHEN side = 'short' THEN entry_price * 0.80
+                    ELSE entry_price * 1.20
+                END
+            ),
+            last_price_at = COALESCE(last_price_at, updated_at)
+        WHERE status = 'open' AND current_price IS NULL
+    """)
+    conn.execute("""
+        UPDATE trade_log
+        SET stop_loss_price = COALESCE(
+                stop_loss_price,
+                CASE WHEN side = 'short' THEN entry_price * 1.03 ELSE entry_price * 0.97 END
+            ),
+            take_profit_price = COALESCE(
+                take_profit_price,
+                CASE WHEN side = 'short' THEN entry_price * 0.80 ELSE entry_price * 1.20 END
+            )
+        WHERE status = 'open'
+          AND (stop_loss_price IS NULL OR take_profit_price IS NULL)
+    """)
+    conn.commit()
 
 
 def init_db():
     """Create tables and seed historical data if DB is empty."""
     conn = get_connection()
     conn.executescript(SCHEMA)
+    _migrate_trade_log(conn)
     conn.commit()
 
     # Only seed if empty
@@ -267,6 +341,29 @@ def record_new_narrative(
     """
     now = datetime.now(timezone.utc).isoformat()
     conn = get_connection()
+    existing = conn.execute("""
+        SELECT id FROM narrative_memory
+        WHERE narrative_tag = ? AND outcome = 'running'
+        ORDER BY first_detected DESC LIMIT 1
+    """, (tag,)).fetchone()
+    if existing:
+        conn.execute("""
+            UPDATE narrative_memory SET
+                sentiment_at_detection = COALESCE(?, sentiment_at_detection),
+                news_volume_at_detection = COALESCE(?, news_volume_at_detection),
+                funding_rate_at_detection = COALESCE(?, funding_rate_at_detection),
+                fear_greed_at_detection = COALESCE(?, fear_greed_at_detection),
+                btc_dominance_at_detection = COALESCE(?, btc_dominance_at_detection),
+                notes = COALESCE(NULLIF(?, ''), notes),
+                updated_at = ?
+            WHERE id = ?
+        """, (sentiment_score, news_volume, funding_rate, fear_greed,
+              btc_dominance, notes, now, existing["id"]))
+        conn.commit()
+        conn.close()
+        print(f"[memory] Running narrative already exists: {tag} (id={existing['id']})")
+        return existing["id"]
+
     cursor = conn.execute("""
         INSERT INTO narrative_memory (
             narrative_tag, first_detected, outcome, confidence_score,
@@ -332,24 +429,54 @@ def log_trade(
     memory_id: int = None,
     memory_informed: bool = False,
     notes: str = "",
+    stop_loss_price: float = None,
+    take_profit_price: float = None,
+    trade_type: str = None,
 ) -> int:
     """Log a paper trade entry. Returns trade ID."""
     now = datetime.now(timezone.utc).isoformat()
     conn = get_connection()
+    resolved_trade_type = trade_type or (
+        "fallback" if narrative_tag.startswith("fallback_") else "narrative"
+    )
     cursor = conn.execute("""
         INSERT INTO trade_log (
             narrative_tag, memory_id, entry_date, symbol, side,
             entry_price, position_size, memory_informed,
+            current_price, unrealized_pnl_pct, stop_loss_price,
+            take_profit_price, last_price_at, trade_type,
             status, notes, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, 'open', ?, ?, ?)
     """, (narrative_tag, memory_id, now, symbol, side,
-          entry_price, position_size, int(memory_informed), notes, now, now))
+          entry_price, position_size, int(memory_informed), entry_price,
+          stop_loss_price, take_profit_price, now, resolved_trade_type,
+          notes, now, now))
     conn.commit()
     trade_id = cursor.lastrowid
     conn.close()
     print(f"[memory] Trade logged: {symbol} {side} @ {entry_price} "
           f"(size={position_size}, memory_informed={memory_informed})")
     return trade_id
+
+
+def update_trade_mark(
+    trade_id: int,
+    current_price: float,
+    unrealized_pnl_pct: float,
+):
+    """Persist the latest mark-to-market values for an open trade."""
+    now = datetime.now(timezone.utc).isoformat()
+    conn = get_connection()
+    conn.execute("""
+        UPDATE trade_log SET
+            current_price = ?,
+            unrealized_pnl_pct = ?,
+            last_price_at = ?,
+            updated_at = ?
+        WHERE id = ? AND status = 'open'
+    """, (current_price, unrealized_pnl_pct, now, now, trade_id))
+    conn.commit()
+    conn.close()
 
 
 def close_trade(

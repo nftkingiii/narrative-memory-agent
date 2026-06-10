@@ -4,6 +4,7 @@ E8 Markets-inspired prop trading dashboard aesthetic
 """
 
 import json
+import os
 import sqlite3
 from pathlib import Path
 from datetime import datetime, timezone
@@ -14,17 +15,31 @@ from fastapi.middleware.cors import CORSMiddleware
 app = FastAPI(title="Narrative Memory Agent")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
-DB_PATH     = Path("data/memory.db")
-STATE_PATH  = Path("data/agent_state.json")
-CONFIG_PATH = Path("data/strategy_config.json")
+PROJECT_ROOT = Path(__file__).parent.parent
+DATA_DIR = Path(os.getenv("DATA_DIR", PROJECT_ROOT / "data"))
+LOG_DIR = Path(os.getenv("LOG_DIR", PROJECT_ROOT / "logs"))
+DB_PATH     = DATA_DIR / "memory.db"
+STATE_PATH  = DATA_DIR / "agent_state.json"
+CONFIG_PATH = DATA_DIR / "strategy_config.json"
+LOG_PATH    = LOG_DIR / "agent.log"
 STARTING_BALANCE = 10_000.0
 SIZE_ALLOCATION  = {"small": 0.01, "medium": 0.03, "full": 0.05, "none": 0.0}
 
 
 def db():
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout=30000")
     return conn
+
+
+@app.middleware("http")
+async def disable_dynamic_cache(request, call_next):
+    response = await call_next(request)
+    if request.url.path.startswith("/api/"):
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+    return response
 
 
 def ensure_portfolio(conn):
@@ -95,6 +110,22 @@ def get_trades():
 def get_config():
     if not CONFIG_PATH.exists(): return {}
     return json.loads(CONFIG_PATH.read_text())
+
+
+@app.get("/api/logs")
+def get_logs():
+    if not LOG_PATH.exists():
+        return {"lines": [], "updated_at": None}
+    try:
+        lines = LOG_PATH.read_text(encoding="utf-8", errors="replace").splitlines()
+        return {
+            "lines": lines[-150:],
+            "updated_at": datetime.fromtimestamp(
+                LOG_PATH.stat().st_mtime, tz=timezone.utc
+            ).isoformat(),
+        }
+    except OSError as exc:
+        return {"lines": [], "updated_at": None, "error": str(exc)}
 
 @app.get("/api/portfolio")
 def get_portfolio():
@@ -595,9 +626,19 @@ tr:hover td{background:rgba(14,165,233,0.03);}
           </div>
           <div class="table-wrap">
             <table>
-              <thead><tr><th>Symbol</th><th>Side</th><th>Narrative</th><th>Entry</th><th>Exit</th><th>PnL</th><th>Status</th></tr></thead>
-              <tbody id="trade-body-dash"><tr><td colspan="7"><div class="empty"><div class="empty-text">No trades yet</div></div></td></tr></tbody>
+              <thead><tr><th>Symbol</th><th>Type</th><th>Entry</th><th>Current</th><th>Live PnL</th><th>Stop</th><th>Target</th><th>Updated</th><th>Status</th></tr></thead>
+              <tbody id="trade-body-dash"><tr><td colspan="9"><div class="empty"><div class="empty-text">No trades yet</div></div></td></tr></tbody>
             </table>
+          </div>
+        </div>
+
+        <div class="panel" style="margin-bottom:16px;">
+          <div class="panel-header">
+            <div class="panel-title">Agent Activity</div>
+            <span class="panel-badge" id="logs-updated">--</span>
+          </div>
+          <div id="activity-log" style="height:260px;overflow:auto;padding:12px 16px;background:var(--bg);font-family:var(--mono);font-size:0.68rem;line-height:1.65;color:var(--text2);white-space:pre-wrap;">
+            Loading agent activity...
           </div>
         </div>
 
@@ -619,8 +660,8 @@ tr:hover td{background:rgba(14,165,233,0.03);}
           </div>
           <div class="table-wrap">
             <table>
-              <thead><tr><th>ID</th><th>Symbol</th><th>Side</th><th>Narrative</th><th>Entry</th><th>Exit</th><th>Size</th><th>PnL</th><th>Exit Reason</th><th>Status</th></tr></thead>
-              <tbody id="trade-body-full"><tr><td colspan="10"><div class="empty"><div class="empty-text">No trades yet</div></div></td></tr></tbody>
+              <thead><tr><th>ID</th><th>Symbol</th><th>Type</th><th>Side</th><th>Narrative</th><th>Entry</th><th>Current / Exit</th><th>Stop</th><th>Target</th><th>Size</th><th>PnL</th><th>Status</th></tr></thead>
+              <tbody id="trade-body-full"><tr><td colspan="12"><div class="empty"><div class="empty-text">No trades yet</div></div></td></tr></tbody>
             </table>
           </div>
         </div>
@@ -631,6 +672,10 @@ tr:hover td{background:rgba(14,165,233,0.03);}
         <div style="margin-bottom:20px;">
           <div style="font-size:1.1rem;font-weight:700;margin-bottom:4px;">Narrative Memory</div>
           <div style="font-family:var(--mono);font-size:0.65rem;color:var(--text3);">Historical narrative patterns — the agent's prior knowledge</div>
+        </div>
+        <div class="panel" style="margin-bottom:16px;">
+          <div class="panel-header"><div class="panel-title">Active Narrative Memory</div></div>
+          <div id="active-memory" style="padding:16px;color:var(--text2);font-family:var(--mono);font-size:0.72rem;">Loading active memory...</div>
         </div>
         <div class="panel">
           <div class="panel-header">
@@ -669,11 +714,20 @@ tr:hover td{background:rgba(14,165,233,0.03);}
 <script>
 const REFRESH = 30000;
 let curveData = [];
+let apiErrors = [];
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 async function api(url) {
-  try { const r = await fetch(url); if (!r.ok) throw new Error(r.status); return await r.json(); }
-  catch(e) { console.error(url, e); return null; }
+  try {
+    const r = await fetch(url, {cache:'no-store'});
+    if (!r.ok) throw new Error(r.status);
+    return await r.json();
+  }
+  catch(e) {
+    console.error(url, e);
+    apiErrors.push(url);
+    return null;
+  }
 }
 function fmtDate(iso) {
   if (!iso || iso === 'start') return '--';
@@ -693,6 +747,7 @@ function outcomeTag(o) {
 }
 function statusTag(s) { return s==='open'?'<span class="tag ta">open</span>':'<span class="tag tg2">closed</span>'; }
 function sideTag(s) { return s==='long'?'<span class="tag tg">long</span>':'<span class="tag tr">short</span>'; }
+function typeTag(s) { return s==='fallback'?'<span class="tag tg2">scouted</span>':'<span class="tag ta">narrative</span>'; }
 function narLabel(t) { return (t||'--').replace(/_/g,' '); }
 
 // ── Section navigation ────────────────────────────────────────────────────
@@ -893,27 +948,31 @@ function renderTrades(trades, bodyId, cols) {
     tbody.innerHTML=`<tr><td colspan="${cols}"><div class="empty"><div class="empty-text">No trades yet</div></div></td></tr>`;
     return;
   }
-  if (cols === 7) {
+  if (cols === 9) {
     tbody.innerHTML = trades.slice(0,10).map(t => `<tr>
       <td style="color:var(--text);font-weight:600;">${t.symbol}</td>
-      <td>${sideTag(t.side)}</td>
-      <td style="color:var(--text3);font-size:0.7rem;">${narLabel(t.narrative_tag)}</td>
+      <td>${typeTag(t.trade_type)}</td>
       <td>${t.entry_price??'--'}</td>
-      <td>${t.exit_price??'--'}</td>
-      <td>${pnlHtml(t.pnl_pct)}</td>
+      <td>${t.status==='open'?(t.current_price??'--'):(t.exit_price??'--')}</td>
+      <td>${pnlHtml(t.status==='open'?t.unrealized_pnl_pct:t.pnl_pct)}</td>
+      <td>${t.stop_loss_price??'--'}</td>
+      <td>${t.take_profit_price??'--'}</td>
+      <td style="color:var(--text3);font-size:0.65rem;">${fmtDate(t.last_price_at||t.updated_at)}</td>
       <td>${statusTag(t.status)}</td>
     </tr>`).join('');
   } else {
     tbody.innerHTML = trades.map(t => `<tr>
       <td style="color:var(--text3);">#${t.id}</td>
       <td style="color:var(--text);font-weight:600;">${t.symbol}</td>
+      <td>${typeTag(t.trade_type)}</td>
       <td>${sideTag(t.side)}</td>
       <td style="color:var(--text3);font-size:0.7rem;">${narLabel(t.narrative_tag)}</td>
       <td>${t.entry_price??'--'}</td>
-      <td>${t.exit_price??'--'}</td>
+      <td>${t.status==='open'?(t.current_price??'--'):(t.exit_price??'--')}</td>
+      <td>${t.stop_loss_price??'--'}</td>
+      <td>${t.take_profit_price??'--'}</td>
       <td><span class="tag tg2">${t.position_size||'--'}</span></td>
-      <td>${pnlHtml(t.pnl_pct)}</td>
-      <td style="color:var(--text3);font-size:0.7rem;">${t.exit_reason??'--'}</td>
+      <td>${pnlHtml(t.status==='open'?t.unrealized_pnl_pct:t.pnl_pct)}</td>
       <td>${statusTag(t.status)}</td>
     </tr>`).join('');
   }
@@ -935,6 +994,41 @@ function renderMemory(narratives) {
     <td>${outcomeTag(n.outcome)}</td>
     <td style="color:var(--text3);font-size:0.65rem;">${n.updated_at?n.updated_at.slice(0,10):'--'}</td>
   </tr>`).join('');
+}
+
+function renderActiveMemory(narratives, state) {
+  const el = document.getElementById('active-memory');
+  if (!narratives) {
+    el.textContent = 'Could not load narrative memory.';
+    return;
+  }
+  const active = narratives.find(n => n.outcome === 'running') ||
+    narratives.find(n => n.narrative_tag === state?.active_narrative);
+  if (!active) {
+    el.textContent = 'No narrative is currently marked as running.';
+    return;
+  }
+  el.innerHTML = `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;">
+    <div><span style="color:var(--text3)">Narrative</span><br><span style="color:var(--text)">${narLabel(active.narrative_tag)}</span></div>
+    <div><span style="color:var(--text3)">First detected</span><br><span style="color:var(--text)">${fmtDate(active.first_detected)}</span></div>
+    <div><span style="color:var(--text3)">Fear & Greed</span><br><span style="color:var(--text)">${active.fear_greed_at_detection??'--'}</span></div>
+    <div><span style="color:var(--text3)">News volume</span><br><span style="color:var(--text)">${active.news_volume_at_detection??'--'}</span></div>
+    <div><span style="color:var(--text3)">Status</span><br>${outcomeTag(active.outcome)}</div>
+  </div>`;
+}
+
+function renderLogs(data) {
+  const el = document.getElementById('activity-log');
+  const badge = document.getElementById('logs-updated');
+  if (!data) {
+    el.textContent = 'Could not load agent logs.';
+    badge.textContent = 'error';
+    return;
+  }
+  const lines = data.lines || [];
+  el.textContent = lines.length ? lines.join('\n') : 'No agent log entries yet.';
+  badge.textContent = data.updated_at ? fmtDate(data.updated_at) : '--';
+  el.scrollTop = el.scrollHeight;
 }
 
 function renderRules(config) {
@@ -984,17 +1078,25 @@ function startRefresh() {
 
 // ── Main load ─────────────────────────────────────────────────────────────
 async function loadAll() {
-  const [state,stats,trades,narratives,config,portfolio] = await Promise.all([
+  apiErrors = [];
+  const [state,stats,trades,narratives,config,portfolio,logs] = await Promise.all([
     api('/api/state'), api('/api/stats'), api('/api/trades'),
     api('/api/narratives'), api('/api/config'), api('/api/portfolio'),
+    api('/api/logs'),
   ]);
   renderState(state);
   renderStats(stats);
-  renderTrades(trades,'trade-body-dash',7);
-  renderTrades(trades,'trade-body-full',10);
+  renderTrades(trades,'trade-body-dash',9);
+  renderTrades(trades,'trade-body-full',12);
   renderMemory(narratives);
+  renderActiveMemory(narratives, state);
+  renderLogs(logs);
   renderRules(config);
   renderPortfolio(portfolio);
+  if (apiErrors.length) {
+    document.getElementById('topbar-date').textContent =
+      'Data error: ' + apiErrors.join(', ');
+  }
   startRefresh();
 }
 

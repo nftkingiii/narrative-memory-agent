@@ -36,9 +36,10 @@ def db():
 @app.middleware("http")
 async def disable_dynamic_cache(request, call_next):
     response = await call_next(request)
-    if request.url.path.startswith("/api/"):
+    if request.url.path == "/" or request.url.path.startswith("/api/"):
         response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
         response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
     return response
 
 
@@ -1048,9 +1049,6 @@ function renderRules(config) {
                    : name==='fear_bounce' ? `${r.min_change_24h_pct}% to ${r.max_change_24h_pct}% daily, F&G <${r.max_fear_greed}`
                    : name==='volume_breakout' ? `20h high, ${r.volume_vs_avg_multiplier}x own volume`
                    : `${r.min_change_24h_pct}% to ${r.max_change_24h_pct}% daily, taker >${((r.min_taker_buy_ratio||0)*100).toFixed(0)}%`;
-    const thresh = name==='momentum_long' ? `min +${r.min_change_24h_pct}% · max +${r.max_change_24h_pct}% · vol $${(r.min_volume_usd/1e6).toFixed(0)}M`
-                 : name==='fear_bounce'  ? `max ${r.max_change_24h_pct}% · F&G <${r.max_fear_greed} · vol $${(r.min_volume_usd/1e6).toFixed(0)}M`
-                 : `min +${r.min_change_24h_pct}% · ${r.volume_vs_avg_multiplier}x avg vol · $${(r.min_volume_usd/1e6).toFixed(0)}M`;
     const wl = (r.wins??0) + 'W / ' + (r.losses??0) + 'L';
     const prog = Math.min(100, (r.win_rate??0)*100);
     return `<div class="rule-row">

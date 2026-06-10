@@ -387,7 +387,17 @@ def evaluate_fear_bounce(markets: list[dict], config: dict,
     rule = config["rules"]["fear_bounce"]
     if not rule["enabled"]:
         return []
-    if fear_greed and fear_greed > rule["max_fear_greed"]:
+    try:
+        fear_greed = float(fear_greed) if fear_greed is not None else None
+        max_fear_greed = float(rule["max_fear_greed"])
+    except (TypeError, ValueError):
+        fear_greed = None
+        max_fear_greed = None
+    if (
+        fear_greed is not None
+        and max_fear_greed is not None
+        and fear_greed > max_fear_greed
+    ):
         return []
     signals = []
     for m in markets:

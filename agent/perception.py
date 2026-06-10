@@ -155,7 +155,11 @@ def get_sentiment(session_id: str) -> dict:
     if fg:
         # Handle list or dict response
         entry = fg[0] if isinstance(fg, list) else fg
-        result["fear_greed_value"] = entry.get("value") or entry.get("score")
+        raw_fear_greed = entry.get("value") or entry.get("score")
+        try:
+            result["fear_greed_value"] = float(raw_fear_greed)
+        except (TypeError, ValueError):
+            result["fear_greed_value"] = None
         result["fear_greed_label"] = entry.get("value_classification") or entry.get("label")
 
     # Long/Short Ratio

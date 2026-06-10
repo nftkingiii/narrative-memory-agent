@@ -8,7 +8,7 @@ RUN apt-get update && apt-get install -y curl && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
 ENV NPM_CONFIG_PREFIX=/usr/local
-RUN npm install -g bitget-hub @bitget-ai/getagent-skill
+RUN npm install -g bitget-client bitget-hub @bitget-ai/getagent-skill
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt

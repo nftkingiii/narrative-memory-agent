@@ -58,6 +58,7 @@ CREATE TABLE IF NOT EXISTS trade_log (
     unrealized_pnl_pct  REAL,
     stop_loss_price     REAL,
     take_profit_price   REAL,
+    initial_risk_pct    REAL,
     last_price_at       TEXT,
     trade_type          TEXT CHECK(trade_type IN ('narrative','fallback')),
     exit_reason         TEXT CHECK(exit_reason IN ('take_profit','stop_loss','memory_exit','manual')),
@@ -181,6 +182,7 @@ def _migrate_trade_log(conn: sqlite3.Connection):
         "unrealized_pnl_pct": "REAL",
         "stop_loss_price": "REAL",
         "take_profit_price": "REAL",
+        "initial_risk_pct": "REAL",
         "last_price_at": "TEXT",
         "trade_type": "TEXT",
     }
@@ -214,6 +216,7 @@ def _migrate_trade_log(conn: sqlite3.Connection):
                     ELSE entry_price * 1.20
                 END
             ),
+            initial_risk_pct = COALESCE(initial_risk_pct, 3.0),
             last_price_at = COALESCE(last_price_at, updated_at)
         WHERE status = 'open' AND current_price IS NULL
     """)
@@ -226,9 +229,18 @@ def _migrate_trade_log(conn: sqlite3.Connection):
             take_profit_price = COALESCE(
                 take_profit_price,
                 CASE WHEN side = 'short' THEN entry_price * 0.80 ELSE entry_price * 1.20 END
+            ),
+            initial_risk_pct = COALESCE(
+                initial_risk_pct,
+                ABS(entry_price - stop_loss_price) / entry_price * 100,
+                3.0
             )
         WHERE status = 'open'
-          AND (stop_loss_price IS NULL OR take_profit_price IS NULL)
+          AND (
+              stop_loss_price IS NULL
+              OR take_profit_price IS NULL
+              OR initial_risk_pct IS NULL
+          )
     """)
     conn.commit()
 
@@ -431,6 +443,7 @@ def log_trade(
     notes: str = "",
     stop_loss_price: float = None,
     take_profit_price: float = None,
+    initial_risk_pct: float = None,
     trade_type: str = None,
 ) -> int:
     """Log a paper trade entry. Returns trade ID."""
@@ -444,12 +457,13 @@ def log_trade(
             narrative_tag, memory_id, entry_date, symbol, side,
             entry_price, position_size, memory_informed,
             current_price, unrealized_pnl_pct, stop_loss_price,
-            take_profit_price, last_price_at, trade_type,
+            take_profit_price, initial_risk_pct, last_price_at, trade_type,
             status, notes, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, 'open', ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, 'open', ?, ?, ?)
     """, (narrative_tag, memory_id, now, symbol, side,
           entry_price, position_size, int(memory_informed), entry_price,
-          stop_loss_price, take_profit_price, now, resolved_trade_type,
+          stop_loss_price, take_profit_price, initial_risk_pct, now,
+          resolved_trade_type,
           notes, now, now))
     conn.commit()
     trade_id = cursor.lastrowid
@@ -475,6 +489,20 @@ def update_trade_mark(
             updated_at = ?
         WHERE id = ? AND status = 'open'
     """, (current_price, unrealized_pnl_pct, now, now, trade_id))
+    conn.commit()
+    conn.close()
+
+
+def update_trade_stop(trade_id: int, stop_loss_price: float):
+    """Raise or lower the stored protective stop for an open trade."""
+    now = datetime.now(timezone.utc).isoformat()
+    conn = get_connection()
+    conn.execute("""
+        UPDATE trade_log SET
+            stop_loss_price = ?,
+            updated_at = ?
+        WHERE id = ? AND status = 'open'
+    """, (stop_loss_price, now, trade_id))
     conn.commit()
     conn.close()
 

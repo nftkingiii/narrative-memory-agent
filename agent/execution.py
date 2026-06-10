@@ -134,6 +134,7 @@ def execute_decision(decision, memory_log_fn=None) -> dict | None:
             notes=decision.reason,
             stop_loss_price=order["stop_loss_price"],
             take_profit_price=order["take_profit_price"],
+            initial_risk_pct=decision.stop_loss_pct,
             trade_type="narrative",
         )
         order["trade_id"] = trade_id
@@ -153,7 +154,7 @@ def monitor_open_positions(close_trade_fn=None) -> list[dict]:
     Closes positions that hit stop loss or take profit.
     Returns list of closed trade records.
     """
-    from agent.memory import get_trade_log, update_trade_mark
+    from agent.memory import get_trade_log, update_trade_mark, update_trade_stop
 
     open_trades = get_trade_log(status="open")
     if not open_trades:
@@ -180,6 +181,25 @@ def monitor_open_positions(close_trade_fn=None) -> list[dict]:
         exit_reason = None
         stop_price = trade.get("stop_loss_price")
         take_price = trade.get("take_profit_price")
+        if (
+            trade.get("trade_type") == "fallback"
+            and stop_price is not None
+            and entry_price
+        ):
+            initial_risk_pct = float(trade.get("initial_risk_pct") or 0)
+            if side == "long" and initial_risk_pct > 0:
+                raised_stop = stop_price
+                if pnl_pct >= initial_risk_pct:
+                    raised_stop = max(raised_stop, entry_price)
+                if pnl_pct >= initial_risk_pct * 1.5:
+                    raised_stop = max(
+                        raised_stop,
+                        current_price * (1 - initial_risk_pct / 100),
+                    )
+                if raised_stop > stop_price:
+                    stop_price = round(raised_stop, 8)
+                    update_trade_stop(trade["id"], stop_price)
+
         if side == "long":
             if stop_price is not None and current_price <= stop_price:
                 exit_reason = "stop_loss"
@@ -190,6 +210,18 @@ def monitor_open_positions(close_trade_fn=None) -> list[dict]:
                 exit_reason = "stop_loss"
             elif take_price is not None and current_price <= take_price:
                 exit_reason = "take_profit"
+
+        if not exit_reason and trade.get("trade_type") == "fallback":
+            try:
+                opened_at = datetime.fromisoformat(trade["entry_date"])
+                hours_open = (
+                    datetime.now(timezone.utc) - opened_at
+                ).total_seconds() / 3600
+                risk_pct = abs(entry_price - stop_price) / entry_price * 100
+                if hours_open >= 24 and pnl_pct < risk_pct * 0.5:
+                    exit_reason = "memory_exit"
+            except (KeyError, TypeError, ValueError):
+                pass
 
         print(f"[execution] {symbol:12s} entry={entry_price} "
               f"current={current_price} PnL={pnl_pct:+.2f}% "

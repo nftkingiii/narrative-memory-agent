@@ -29,13 +29,22 @@ CIRCUIT_PATH = DATA_DIR / "circuit_breaker.json"
 
 STARTING_BALANCE    = 10_000.0
 MAX_DAILY_LOSS_USD  = 300.0     # circuit breaker trips at -$300/day
-MAX_EXPOSURE_PCT    = 0.80      # max 80% of portfolio in open positions
+MAX_EXPOSURE_PCT    = 0.30
 MIN_RR              = 1.2       # minimum risk:reward ratio
 COOLDOWN_SECONDS    = 300       # 5 minutes between any new entry
+STOP_REENTRY_HOURS  = 12
 MIN_TAKER_BUY_RATIO = 0.52      # buyers must be > 52% of taker volume
 MAX_FUNDING_RATE    = 0.0003    # 0.03% — don't long into overleveraged longs
 
-SIZE_ALLOCATION = {"small": 0.01, "medium": 0.03, "full": 0.05, "none": 0.0}
+SIZE_ALLOCATION = {"small": 0.05, "medium": 0.10, "full": 0.15, "none": 0.0}
+
+ELIGIBLE_BASE_ASSETS = {
+    "AAVE", "ADA", "ALGO", "APT", "ARB", "ATOM", "AVAX", "BCH", "BNB",
+    "BONK", "BTC", "CRV", "DOGE", "DOT", "ENA", "ETC", "ETH", "FET",
+    "FIL", "HBAR", "HYPE", "INJ", "JUP", "LINK", "LTC", "NEAR", "ONDO",
+    "OP", "PEPE", "POL", "RENDER", "SEI", "SHIB", "SOL", "STX", "SUI",
+    "TAO", "TIA", "TON", "TRX", "UNI", "WIF", "XLM", "XRP",
+}
 
 
 # ─────────────────────────────────────────────
@@ -43,36 +52,44 @@ SIZE_ALLOCATION = {"small": 0.01, "medium": 0.03, "full": 0.05, "none": 0.0}
 # ─────────────────────────────────────────────
 
 DEFAULT_CONFIG = {
+    "strategy_version": 3,
     "rules": {
         "momentum_long": {
             "enabled": True,
-            "min_change_24h_pct": 3.0,
-            "max_change_24h_pct": 25.0,
-            "min_volume_usd": 5_000_000,
-            "take_profit_pct": 4.0,
-            "stop_loss_pct": 2.0,
+            "min_change_24h_pct": 2.0,
+            "max_change_24h_pct": 12.0,
+            "min_change_1h_pct": 0.15,
+            "min_change_4h_pct": 0.75,
+            "min_volume_usd": 10_000_000,
+            "min_volume_ratio": 1.2,
+            "atr_stop_multiplier": 1.6,
+            "reward_risk_ratio": 2.0,
             "position_size": "small",
             "trades": 0, "wins": 0, "losses": 0,
             "win_rate": 0.0, "last_adjusted": None,
         },
         "fear_bounce": {
             "enabled": True,
-            "max_change_24h_pct": -5.0,
-            "max_fear_greed": 35,
-            "min_volume_usd": 3_000_000,
-            "take_profit_pct": 3.0,
-            "stop_loss_pct": 2.5,
+            "max_change_24h_pct": -6.0,
+            "min_change_24h_pct": -15.0,
+            "max_fear_greed": 25,
+            "min_change_1h_pct": 0.15,
+            "min_volume_usd": 10_000_000,
+            "atr_stop_multiplier": 1.5,
+            "reward_risk_ratio": 1.8,
             "position_size": "small",
             "trades": 0, "wins": 0, "losses": 0,
             "win_rate": 0.0, "last_adjusted": None,
         },
         "volume_breakout": {
             "enabled": True,
-            "min_change_24h_pct": 1.5,
+            "min_change_24h_pct": 1.0,
+            "max_change_24h_pct": 10.0,
+            "min_change_1h_pct": 0.2,
             "min_volume_usd": 10_000_000,
-            "volume_vs_avg_multiplier": 2.0,
-            "take_profit_pct": 3.5,
-            "stop_loss_pct": 2.0,
+            "volume_vs_avg_multiplier": 1.5,
+            "atr_stop_multiplier": 1.6,
+            "reward_risk_ratio": 2.0,
             "position_size": "small",
             "trades": 0, "wins": 0, "losses": 0,
             "win_rate": 0.0, "last_adjusted": None,
@@ -80,10 +97,11 @@ DEFAULT_CONFIG = {
         "taker_momentum": {
             "enabled": True,
             "min_change_24h_pct": 2.0,
+            "max_change_24h_pct": 10.0,
             "min_volume_usd": 8_000_000,
             "min_taker_buy_ratio": 0.55,  # aggressive buyer dominance
-            "take_profit_pct": 3.5,
-            "stop_loss_pct": 2.0,
+            "atr_stop_multiplier": 1.6,
+            "reward_risk_ratio": 2.0,
             "position_size": "small",
             "trades": 0, "wins": 0, "losses": 0,
             "win_rate": 0.0, "last_adjusted": None,
@@ -93,6 +111,7 @@ DEFAULT_CONFIG = {
     "deprioritized_assets": [],
     "scan_count": 0,
     "last_scan": None,
+    "processed_trade_ids": [],
     "daily_stats": {
         "date": None,
         "pnl_usd": 0.0,
@@ -117,13 +136,26 @@ def load_config() -> dict:
     try:
         with open(CONFIG_PATH) as f:
             config = json.load(f)
+        previous_version = int(config.get("strategy_version", 1))
         for rule, defaults in DEFAULT_CONFIG["rules"].items():
             if rule not in config["rules"]:
-                config["rules"][rule] = defaults
+                config["rules"][rule] = defaults.copy()
+            else:
+                for key, value in defaults.items():
+                    if (
+                        previous_version < DEFAULT_CONFIG["strategy_version"]
+                        and key not in {
+                            "trades", "wins", "losses", "win_rate",
+                            "last_adjusted",
+                        }
+                    ):
+                        config["rules"][rule][key] = value
+                    else:
+                        config["rules"][rule].setdefault(key, value)
         if "daily_stats" not in config:
             config["daily_stats"] = DEFAULT_CONFIG["daily_stats"].copy()
-        if "taker_momentum" not in config["rules"]:
-            config["rules"]["taker_momentum"] = DEFAULT_CONFIG["rules"]["taker_momentum"]
+        config.setdefault("processed_trade_ids", [])
+        config["strategy_version"] = DEFAULT_CONFIG["strategy_version"]
         return config
     except Exception:
         return DEFAULT_CONFIG.copy()
@@ -175,6 +207,94 @@ def fetch_tickers() -> list[dict]:
     except Exception as e:
         print(f"[fallback] ERROR fetching tickers: {e}")
         return []
+
+
+def fetch_candles(
+    symbol: str,
+    granularity: str = "1h",
+    limit: int = 50,
+) -> list[dict]:
+    """Fetch normalized spot candles ordered from oldest to newest."""
+    try:
+        resp = requests.get(
+            "https://api.bitget.com/api/v2/spot/market/candles",
+            params={
+                "symbol": symbol,
+                "granularity": granularity,
+                "limit": str(limit),
+            },
+            timeout=8,
+        )
+        resp.raise_for_status()
+        rows = resp.json().get("data", [])
+        candles = []
+        for row in rows:
+            if len(row) < 7:
+                continue
+            candles.append({
+                "timestamp": int(row[0]),
+                "open": float(row[1]),
+                "high": float(row[2]),
+                "low": float(row[3]),
+                "close": float(row[4]),
+                "volume_usdt": float(row[6]),
+            })
+        return sorted(candles, key=lambda candle: candle["timestamp"])
+    except (requests.RequestException, ValueError, TypeError) as exc:
+        print(f"[fallback] Candle fetch failed for {symbol}: {exc}")
+        return []
+
+
+def _ema(values: list[float], period: int) -> float:
+    if not values:
+        return 0.0
+    multiplier = 2 / (period + 1)
+    result = values[0]
+    for value in values[1:]:
+        result = value * multiplier + result * (1 - multiplier)
+    return result
+
+
+def _atr_pct(candles: list[dict], period: int = 14) -> float:
+    if len(candles) < period + 1:
+        return 0.0
+    true_ranges = []
+    for previous, current in zip(candles[-period - 1:-1], candles[-period:]):
+        true_ranges.append(max(
+            current["high"] - current["low"],
+            abs(current["high"] - previous["close"]),
+            abs(current["low"] - previous["close"]),
+        ))
+    close = candles[-1]["close"]
+    return (sum(true_ranges) / len(true_ranges)) / close * 100 if close else 0.0
+
+
+def enrich_market_history(market: dict) -> dict | None:
+    """Add trend, rolling-volume, breakout, and volatility features."""
+    candles = fetch_candles(market["symbol"])
+    if len(candles) < 25:
+        return None
+
+    completed = candles[:-1]
+    closes = [candle["close"] for candle in completed]
+    prior_volumes = [candle["volume_usdt"] for candle in completed[-21:-1]]
+    average_volume = sum(prior_volumes) / len(prior_volumes) if prior_volumes else 0
+    previous_high = max(candle["high"] for candle in completed[-21:-1])
+    latest = completed[-1]
+
+    market.update({
+        "change_1h": (closes[-1] / closes[-2] - 1) * 100,
+        "change_4h": (closes[-1] / closes[-5] - 1) * 100,
+        "ema_fast": _ema(closes[-30:], 8),
+        "ema_slow": _ema(closes[-30:], 21),
+        "volume_ratio": (
+            latest["volume_usdt"] / average_volume if average_volume > 0 else 0
+        ),
+        "atr_pct": _atr_pct(completed),
+        "positive_1h_candle": latest["close"] > latest["open"],
+        "breakout_20h": latest["close"] >= previous_high * 0.995,
+    })
+    return market
 
 
 def fetch_taker_ratio(symbol: str) -> float | None:
@@ -296,7 +416,7 @@ def check_exposure(open_trades: list, portfolio_balance: float) -> tuple[bool, s
         for t in open_trades
     )
     exposure_pct = allocated / portfolio_balance
-    if exposure_pct >= MAX_EXPOSURE_PCT:
+    if exposure_pct + SIZE_ALLOCATION["small"] > MAX_EXPOSURE_PCT:
         return False, f"Exposure {exposure_pct:.0%} at max {MAX_EXPOSURE_PCT:.0%}"
     return True, "OK"
 
@@ -315,6 +435,9 @@ def scan_markets(limit: int = 30) -> list[dict]:
     for t in tickers:
         symbol = t.get("symbol", "")
         if not symbol.endswith("USDT"):
+            continue
+        base_asset = symbol[:-4]
+        if base_asset not in ELIGIBLE_BASE_ASSETS:
             continue
         try:
             last_price  = float(t.get("lastPr") or 0)
@@ -346,14 +469,44 @@ def scan_markets(limit: int = 30) -> list[dict]:
             continue
 
     markets.sort(key=lambda x: x["volume_usdt"], reverse=True)
-    filtered = markets[:limit]
-    print(f"[fallback] Scanned {len(filtered)} markets (from {len(tickers)} total USDT pairs)")
-    return filtered
+    candidates = markets[:limit]
+    enriched = []
+    for market in candidates:
+        historical = enrich_market_history(market)
+        if historical:
+            enriched.append(historical)
+    print(
+        f"[fallback] Scanned {len(enriched)} established crypto markets "
+        f"(from {len(tickers)} tickers)"
+    )
+    return enriched
 
 
 # ─────────────────────────────────────────────
 # Rule Evaluators
 # ─────────────────────────────────────────────
+
+def risk_parameters(market: dict, rule: dict) -> tuple[float, float, float]:
+    """Return volatility-aware stop, target, and R:R percentages."""
+    atr_pct = max(0.75, min(float(market.get("atr_pct") or 0), 6.0))
+    stop_pct = max(1.5, min(
+        atr_pct * float(rule.get("atr_stop_multiplier", 1.6)),
+        6.0,
+    ))
+    rr = max(MIN_RR, float(rule.get("reward_risk_ratio", 2.0)))
+    target_pct = min(stop_pct * rr, 12.0)
+    return round(stop_pct, 2), round(target_pct, 2), round(target_pct / stop_pct, 2)
+
+
+def position_size_for_signal(score: float, stop_loss_pct: float) -> str:
+    """Choose a tier while keeping approximate portfolio risk below 0.5%."""
+    max_allocation = 0.005 / max(stop_loss_pct / 100, 0.0001)
+    if score >= 0.82 and max_allocation >= SIZE_ALLOCATION["full"]:
+        return "full"
+    if score >= 0.68 and max_allocation >= SIZE_ALLOCATION["medium"]:
+        return "medium"
+    return "small"
+
 
 def evaluate_momentum_long(markets: list[dict], config: dict) -> list[FallbackSignal]:
     rule = config["rules"]["momentum_long"]
@@ -366,18 +519,37 @@ def evaluate_momentum_long(markets: list[dict], config: dict) -> list[FallbackSi
             continue
         if volume < rule["min_volume_usd"]:
             continue
-        rr_ok, rr = check_rr(rule["take_profit_pct"], rule["stop_loss_pct"])
+        if m["change_1h"] < rule["min_change_1h_pct"]:
+            continue
+        if m["change_4h"] < rule["min_change_4h_pct"]:
+            continue
+        if m["ema_fast"] <= m["ema_slow"]:
+            continue
+        if m["volume_ratio"] < rule["min_volume_ratio"]:
+            continue
+        stop_pct, target_pct, rr = risk_parameters(m, rule)
+        rr_ok, _ = check_rr(target_pct, stop_pct)
         if not rr_ok:
             continue
-        score = min(0.9, 0.4 + (change - rule["min_change_24h_pct"]) /
-                    (rule["max_change_24h_pct"] - rule["min_change_24h_pct"]) * 0.5)
+        score = min(
+            0.92,
+            0.42
+            + min(m["change_4h"] / 8, 0.20)
+            + min((m["volume_ratio"] - 1) / 4, 0.20)
+            + (0.10 if m["breakout_20h"] else 0),
+        )
         signals.append(FallbackSignal(
             rule="momentum_long", symbol=m["symbol"],
             last_price=m["last_price"], change_24h=change,
-            volume_usdt=volume, take_profit_pct=rule["take_profit_pct"],
-            stop_loss_pct=rule["stop_loss_pct"], position_size=rule["position_size"],
+            volume_usdt=volume, take_profit_pct=target_pct,
+            stop_loss_pct=stop_pct,
+            position_size=position_size_for_signal(score, stop_pct),
             score=round(score, 3), rr_ratio=rr,
-            reason=f"Momentum: +{change:.1f}% in 24h, vol=${volume/1e6:.1f}M, R:R={rr:.1f}x",
+            reason=(
+                f"Trend momentum: 24h={change:+.1f}%, 4h={m['change_4h']:+.1f}%, "
+                f"volume={m['volume_ratio']:.1f}x, ATR={m['atr_pct']:.1f}%, "
+                f"R:R={rr:.1f}x"
+            ),
         ))
     return signals
 
@@ -402,21 +574,40 @@ def evaluate_fear_bounce(markets: list[dict], config: dict,
     signals = []
     for m in markets:
         change, volume = m["change_24h"], m["volume_usdt"]
-        if change > rule["max_change_24h_pct"] or change < -20:
+        if not (
+            rule["min_change_24h_pct"]
+            <= change
+            <= rule["max_change_24h_pct"]
+        ):
             continue
         if volume < rule["min_volume_usd"]:
             continue
-        rr_ok, rr = check_rr(rule["take_profit_pct"], rule["stop_loss_pct"])
+        if m["change_1h"] < rule["min_change_1h_pct"]:
+            continue
+        if not m["positive_1h_candle"] or m["last_price"] < m["ema_fast"]:
+            continue
+        stop_pct, target_pct, rr = risk_parameters(m, rule)
+        rr_ok, _ = check_rr(target_pct, stop_pct)
         if not rr_ok:
             continue
-        drop_score = min(0.85, 0.4 + abs(change + rule["max_change_24h_pct"]) / 15 * 0.45)
+        drop_score = min(
+            0.88,
+            0.45
+            + min(abs(change) / 30, 0.25)
+            + min(max(m["change_1h"], 0) / 5, 0.15),
+        )
         signals.append(FallbackSignal(
             rule="fear_bounce", symbol=m["symbol"],
             last_price=m["last_price"], change_24h=change,
-            volume_usdt=volume, take_profit_pct=rule["take_profit_pct"],
-            stop_loss_pct=rule["stop_loss_pct"], position_size=rule["position_size"],
+            volume_usdt=volume, take_profit_pct=target_pct,
+            stop_loss_pct=stop_pct,
+            position_size=position_size_for_signal(drop_score, stop_pct),
             score=round(drop_score, 3), rr_ratio=rr,
-            reason=f"Fear bounce: {change:.1f}% drop, F&G={fear_greed or 'unknown'}, R:R={rr:.1f}x",
+            reason=(
+                f"Confirmed fear bounce: 24h={change:.1f}%, "
+                f"1h={m['change_1h']:+.1f}%, F&G={fear_greed or 'unknown'}, "
+                f"ATR={m['atr_pct']:.1f}%, R:R={rr:.1f}x"
+            ),
         ))
     return signals
 
@@ -425,26 +616,40 @@ def evaluate_volume_breakout(markets: list[dict], config: dict) -> list[Fallback
     rule = config["rules"]["volume_breakout"]
     if not rule["enabled"] or not markets:
         return []
-    avg_volume = sum(m["volume_usdt"] for m in markets) / len(markets)
     signals = []
     for m in markets:
         change, volume = m["change_24h"], m["volume_usdt"]
-        if change < rule["min_change_24h_pct"] or volume < rule["min_volume_usd"]:
+        if not (
+            rule["min_change_24h_pct"]
+            <= change
+            <= rule["max_change_24h_pct"]
+        ):
             continue
-        vol_mult = volume / avg_volume if avg_volume > 0 else 0
+        if volume < rule["min_volume_usd"]:
+            continue
+        if m["change_1h"] < rule["min_change_1h_pct"]:
+            continue
+        if not m["breakout_20h"] or m["ema_fast"] <= m["ema_slow"]:
+            continue
+        vol_mult = m["volume_ratio"]
         if vol_mult < rule["volume_vs_avg_multiplier"]:
             continue
-        rr_ok, rr = check_rr(rule["take_profit_pct"], rule["stop_loss_pct"])
+        stop_pct, target_pct, rr = risk_parameters(m, rule)
+        rr_ok, _ = check_rr(target_pct, stop_pct)
         if not rr_ok:
             continue
-        score = round(min(0.90, 0.45 + (vol_mult - 2) / 8 * 0.45), 3)
+        score = round(min(0.92, 0.52 + (vol_mult - 1.5) / 5 * 0.35), 3)
         signals.append(FallbackSignal(
             rule="volume_breakout", symbol=m["symbol"],
             last_price=m["last_price"], change_24h=change,
-            volume_usdt=volume, take_profit_pct=rule["take_profit_pct"],
-            stop_loss_pct=rule["stop_loss_pct"], position_size=rule["position_size"],
+            volume_usdt=volume, take_profit_pct=target_pct,
+            stop_loss_pct=stop_pct,
+            position_size=position_size_for_signal(score, stop_pct),
             score=score, rr_ratio=rr,
-            reason=f"Volume breakout: {vol_mult:.1f}x avg, +{change:.1f}%, R:R={rr:.1f}x",
+            reason=(
+                f"20h breakout: own volume={vol_mult:.1f}x average, "
+                f"24h={change:+.1f}%, ATR={m['atr_pct']:.1f}%, R:R={rr:.1f}x"
+            ),
         ))
     return signals
 
@@ -461,9 +666,17 @@ def evaluate_taker_momentum(markets: list[dict], config: dict) -> list[FallbackS
     signals = []
     for m in markets:
         change, volume = m["change_24h"], m["volume_usdt"]
-        if change < rule.get("min_change_24h_pct", 2.0):
+        if not (
+            rule.get("min_change_24h_pct", 2.0)
+            <= change
+            <= rule.get("max_change_24h_pct", 10.0)
+        ):
             continue
         if volume < rule.get("min_volume_usd", 8_000_000):
+            continue
+        if m["change_1h"] <= 0 or m["change_4h"] <= 0:
+            continue
+        if m["ema_fast"] <= m["ema_slow"]:
             continue
         # Check taker ratio (fetch from API)
         taker_ratio = fetch_taker_ratio(m["symbol"])
@@ -471,18 +684,18 @@ def evaluate_taker_momentum(markets: list[dict], config: dict) -> list[FallbackS
             continue
         if taker_ratio < rule.get("min_taker_buy_ratio", 0.55):
             continue
-        rr_ok, rr = check_rr(rule.get("take_profit_pct", 3.5),
-                              rule.get("stop_loss_pct", 2.0))
+        stop_pct, target_pct, rr = risk_parameters(m, rule)
+        rr_ok, _ = check_rr(target_pct, stop_pct)
         if not rr_ok:
             continue
-        score = round(min(0.92, 0.50 + taker_ratio * 0.42), 3)
+        score = round(min(0.92, 0.48 + (taker_ratio - 0.5) * 1.8), 3)
         signals.append(FallbackSignal(
             rule="taker_momentum", symbol=m["symbol"],
             last_price=m["last_price"], change_24h=change,
             volume_usdt=volume,
-            take_profit_pct=rule.get("take_profit_pct", 3.5),
-            stop_loss_pct=rule.get("stop_loss_pct", 2.0),
-            position_size=rule.get("position_size", "small"),
+            take_profit_pct=target_pct,
+            stop_loss_pct=stop_pct,
+            position_size=position_size_for_signal(score, stop_pct),
             score=score, rr_ratio=rr, taker_buy_ratio=taker_ratio,
             reason=f"Taker momentum: buy ratio {taker_ratio:.1%}, +{change:.1f}%, R:R={rr:.1f}x",
         ))
@@ -532,10 +745,21 @@ def select_best_signal(signals: list[FallbackSignal], config: dict,
     deprioritized = config.get("deprioritized_assets", [])
     open_symbols = open_symbols or []
 
-    # Filter deprioritized and already-open symbols
-    signals = [s for s in signals
-               if s.symbol not in deprioritized
-               and s.symbol not in open_symbols]
+    def symbol_available(symbol: str) -> bool:
+        if symbol in deprioritized or symbol in open_symbols:
+            return False
+        history = config.get("asset_performance", {}).get(symbol, {})
+        if history.get("last_exit_reason") != "stop_loss":
+            return True
+        try:
+            last_exit = datetime.fromisoformat(history["last_exit_time"])
+            return datetime.now(timezone.utc) - last_exit >= timedelta(
+                hours=STOP_REENTRY_HOURS
+            )
+        except (KeyError, TypeError, ValueError):
+            return True
+
+    signals = [signal for signal in signals if symbol_available(signal.symbol)]
     if not signals:
         return None
 
@@ -598,7 +822,7 @@ def run_fallback_scan(fear_greed: float = None, open_trades: list = None,
         return None
 
     # ── Scan ─────────────────────────────────
-    markets = scan_markets(limit=30)
+    markets = scan_markets(limit=20)
     if not markets:
         save_config(config)
         return None
@@ -635,6 +859,16 @@ def run_fallback_scan(fear_greed: float = None, open_trades: list = None,
 
     # ── Select Best ───────────────────────────
     best = select_best_signal(gated_signals, config, open_symbols)
+    if best:
+        current_exposure = sum(
+            SIZE_ALLOCATION.get(trade.get("position_size", "small"), 0.05)
+            for trade in open_trades
+        )
+        remaining = MAX_EXPOSURE_PCT - current_exposure
+        if SIZE_ALLOCATION[best.position_size] > remaining:
+            best.position_size = (
+                "medium" if remaining >= SIZE_ALLOCATION["medium"] else "small"
+            )
     save_config(config)
     return best
 
@@ -643,18 +877,33 @@ def run_fallback_scan(fear_greed: float = None, open_trades: list = None,
 # Learning: Update Rule Performance
 # ─────────────────────────────────────────────
 
-def update_rule_performance(rule: str, symbol: str, pnl_pct: float,
-                            exit_reason: str, pnl_usd: float = 0.0):
+def update_rule_performance(
+    rule: str,
+    symbol: str,
+    pnl_pct: float,
+    exit_reason: str,
+    pnl_usd: float = 0.0,
+    trade_id: int = None,
+):
     """Update rule win rate, adjust thresholds, update daily stats."""
     config = load_config()
     config = reset_daily_stats_if_needed(config)
+
+    processed_ids = config.setdefault("processed_trade_ids", [])
+    if trade_id is not None and trade_id in processed_ids:
+        return
 
     if rule not in config["rules"]:
         save_config(config)
         return
 
     rule_cfg = config["rules"][rule]
-    won = pnl_pct > 0 and exit_reason == "take_profit"
+    won = pnl_pct > 0
+    effective_exit_reason = (
+        "trailing_stop"
+        if won and exit_reason == "stop_loss"
+        else exit_reason
+    )
 
     rule_cfg["trades"] = rule_cfg.get("trades", 0) + 1
     if won:
@@ -674,6 +923,9 @@ def update_rule_performance(rule: str, symbol: str, pnl_pct: float,
     if won:
         asset["wins"] += 1
     asset["win_rate"] = round(asset["wins"] / asset["trades"], 3)
+    asset["last_exit_time"] = datetime.now(timezone.utc).isoformat()
+    asset["last_exit_reason"] = effective_exit_reason
+    asset["last_pnl_pct"] = round(pnl_pct, 4)
     config["asset_performance"][symbol] = asset
 
     # Deprioritize poor performers
@@ -698,8 +950,38 @@ def update_rule_performance(rule: str, symbol: str, pnl_pct: float,
         _adjust_thresholds(rule, rule_cfg)
         rule_cfg["last_adjusted"] = datetime.now(timezone.utc).isoformat()
 
+    if trade_id is not None:
+        processed_ids.append(trade_id)
+        config["processed_trade_ids"] = processed_ids[-500:]
+
     config["rules"][rule] = rule_cfg
     save_config(config)
+
+
+def process_closed_fallback_trades(closed_trades: list[dict]) -> int:
+    """Feed newly closed fallback trades into the adaptive rule statistics."""
+    processed = 0
+    for trade in closed_trades:
+        if trade.get("trade_type") != "fallback":
+            continue
+        tag = trade.get("narrative_tag", "")
+        if not tag.startswith("fallback_"):
+            continue
+        pnl_pct = float(trade.get("pnl_pct") or 0)
+        allocation = SIZE_ALLOCATION.get(trade.get("position_size"), 0.05)
+        pnl_usd = STARTING_BALANCE * allocation * pnl_pct / 100
+        before = set(load_config().get("processed_trade_ids", []))
+        update_rule_performance(
+            rule=tag.removeprefix("fallback_"),
+            symbol=trade["symbol"],
+            pnl_pct=pnl_pct,
+            exit_reason=trade.get("exit_reason") or "manual",
+            pnl_usd=pnl_usd,
+            trade_id=trade.get("id"),
+        )
+        if trade.get("id") not in before:
+            processed += 1
+    return processed
 
 
 def _adjust_thresholds(rule: str, rule_cfg: dict):

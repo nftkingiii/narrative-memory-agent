@@ -247,6 +247,8 @@ def process_closed_trades(
     results = []
 
     for trade in closed_trades:
+        if trade.get("trade_type") == "fallback":
+            continue
         # Skip if already written back
         notes = trade.get("notes", "") or ""
         entry_date = trade.get("entry_date", "") or ""

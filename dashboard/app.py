@@ -23,7 +23,7 @@ STATE_PATH  = DATA_DIR / "agent_state.json"
 CONFIG_PATH = DATA_DIR / "strategy_config.json"
 LOG_PATH    = LOG_DIR / "agent.log"
 STARTING_BALANCE = 10_000.0
-SIZE_ALLOCATION  = {"small": 0.01, "medium": 0.03, "full": 0.05, "none": 0.0}
+SIZE_ALLOCATION  = {"small": 0.05, "medium": 0.10, "full": 0.15, "none": 0.0}
 
 
 def db():
@@ -1044,6 +1044,10 @@ function renderRules(config) {
   const rows = Object.entries(config.rules).map(([name,r]) => {
     const wr = r.win_rate ?? 0; const wrPct = (wr*100).toFixed(1);
     const wrColor = wr>0.55?'var(--green2)':wr<0.40?'var(--red2)':'var(--amber2)';
+    const v3Thresh = name==='momentum_long' ? `${r.min_change_24h_pct}% to ${r.max_change_24h_pct}% daily, ${r.min_volume_ratio}x own volume`
+                   : name==='fear_bounce' ? `${r.min_change_24h_pct}% to ${r.max_change_24h_pct}% daily, F&G <${r.max_fear_greed}`
+                   : name==='volume_breakout' ? `20h high, ${r.volume_vs_avg_multiplier}x own volume`
+                   : `${r.min_change_24h_pct}% to ${r.max_change_24h_pct}% daily, taker >${((r.min_taker_buy_ratio||0)*100).toFixed(0)}%`;
     const thresh = name==='momentum_long' ? `min +${r.min_change_24h_pct}% · max +${r.max_change_24h_pct}% · vol $${(r.min_volume_usd/1e6).toFixed(0)}M`
                  : name==='fear_bounce'  ? `max ${r.max_change_24h_pct}% · F&G <${r.max_fear_greed} · vol $${(r.min_volume_usd/1e6).toFixed(0)}M`
                  : `min +${r.min_change_24h_pct}% · ${r.volume_vs_avg_multiplier}x avg vol · $${(r.min_volume_usd/1e6).toFixed(0)}M`;
@@ -1052,14 +1056,14 @@ function renderRules(config) {
     return `<div class="rule-row">
       <div class="rule-left">
         <div class="rule-name">${name.replace(/_/g,' ')}</div>
-        <div class="rule-thresh">${thresh}</div>
+        <div class="rule-thresh">${v3Thresh}</div>
         <div class="prog-bar" style="width:140px;"><div class="prog-fill" style="width:${prog}%"></div></div>
       </div>
       <div class="rule-right">
         <div class="rule-stat"><div class="rs-label">Trades</div><div class="rs-val" style="color:var(--text)">${r.trades??0}</div></div>
         <div class="rule-stat"><div class="rs-label">W / L</div><div class="rs-val" style="color:var(--text)">${wl}</div></div>
         <div class="rule-stat"><div class="rs-label">Win Rate</div><div class="rs-val" style="color:${wrColor}">${r.trades?wrPct+'%':'--'}</div></div>
-        <div class="rule-stat"><div class="rs-label">TP / SL</div><div class="rs-val" style="color:var(--text2)">+${r.take_profit_pct}% / -${r.stop_loss_pct}%</div></div>
+        <div class="rule-stat"><div class="rs-label">Exit Model</div><div class="rs-val" style="color:var(--text2)">${r.reward_risk_ratio||'--'}R, ${r.atr_stop_multiplier||'--'} ATR</div></div>
         <div class="rule-stat"><div class="rs-label">Status</div><div>${r.enabled!==false?'<span class="tag tg">on</span>':'<span class="tag tg2">off</span>'}</div></div>
       </div>
     </div>`;

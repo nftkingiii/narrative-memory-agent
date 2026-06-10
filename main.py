@@ -40,9 +40,9 @@ from agent.detection import detect_narratives
 from agent.decision import decide_all
 from agent.execution import execute_decision, monitor_open_positions
 from agent.fallback import (
+    process_closed_fallback_trades,
     record_fallback_entry,
     run_fallback_scan,
-    update_rule_performance,
 )
 from agent.writeback import process_closed_trades
 
@@ -317,6 +317,7 @@ def run_cycle():
                 notes=fallback_signal.reason,
                 stop_loss_price=stop_loss_price,
                 take_profit_price=take_profit_price,
+                initial_risk_pct=fallback_signal.stop_loss_pct,
                 trade_type="fallback",
             )
             record_fallback_entry()
@@ -341,6 +342,14 @@ def run_cycle():
 
         # ── Step 6: Writeback ────────────────────────────
         log.info("Step 6: Writeback")
+        fallback_updates = process_closed_fallback_trades(
+            get_trade_log(status="closed")
+        )
+        if fallback_updates:
+            log.info(
+                f"  Updated fallback learning from "
+                f"{fallback_updates} closed trade(s)"
+            )
         wb_results = process_closed_trades(
             get_trades_fn=get_trade_log,
             get_memory_fn=query_narrative,
@@ -379,6 +388,7 @@ def monitor_positions_job():
             return
         log.info(f"Live monitor: refreshing {open_count} open position(s)")
         closed = monitor_open_positions(close_trade_fn=close_trade)
+        process_closed_fallback_trades(closed)
         for trade in closed:
             log.info(
                 f"Live monitor closed {trade['symbol']} "

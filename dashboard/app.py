@@ -915,8 +915,6 @@ function renderStats(stats) {
   avgEl.className = 'metric-value ' + (stats.avg_pnl>0?'pos':stats.avg_pnl<0?'neg':'neu');
   document.getElementById('m-memory').textContent = stats.narratives_in_memory ?? '--';
 
-  document.getElementById('s-total').textContent = stats.total_trades ?? '--';
-  document.getElementById('s-openpos').textContent = stats.open_trades ?? '--';
   document.getElementById('trade-count').textContent = stats.total_trades ?? 0;
   document.getElementById('trade-count-full').textContent = stats.total_trades ?? 0;
 }
@@ -1076,6 +1074,15 @@ function startRefresh() {
   setTimeout(()=>{ el.style.transition=`width ${REFRESH}ms linear`; el.style.width='0%'; },50);
 }
 
+function safeRender(name, render) {
+  try {
+    render();
+  } catch (error) {
+    console.error(`Failed to render ${name}`, error);
+    apiErrors.push(`${name} render`);
+  }
+}
+
 // ── Main load ─────────────────────────────────────────────────────────────
 async function loadAll() {
   apiErrors = [];
@@ -1084,15 +1091,15 @@ async function loadAll() {
     api('/api/narratives'), api('/api/config'), api('/api/portfolio'),
     api('/api/logs'),
   ]);
-  renderState(state);
-  renderStats(stats);
-  renderTrades(trades,'trade-body-dash',9);
-  renderTrades(trades,'trade-body-full',12);
-  renderMemory(narratives);
-  renderActiveMemory(narratives, state);
-  renderLogs(logs);
-  renderRules(config);
-  renderPortfolio(portfolio);
+  safeRender('state', () => renderState(state));
+  safeRender('stats', () => renderStats(stats));
+  safeRender('recent trades', () => renderTrades(trades,'trade-body-dash',9));
+  safeRender('trade log', () => renderTrades(trades,'trade-body-full',12));
+  safeRender('memory', () => renderMemory(narratives));
+  safeRender('active memory', () => renderActiveMemory(narratives, state));
+  safeRender('logs', () => renderLogs(logs));
+  safeRender('rules', () => renderRules(config));
+  safeRender('portfolio', () => renderPortfolio(portfolio));
   if (apiErrors.length) {
     document.getElementById('topbar-date').textContent =
       'Data error: ' + apiErrors.join(', ');

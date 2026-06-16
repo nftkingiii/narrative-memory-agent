@@ -26,6 +26,7 @@ PROJECT_ROOT = Path(__file__).parent.parent
 DATA_DIR = Path(os.getenv("DATA_DIR", PROJECT_ROOT / "data"))
 CONFIG_PATH  = DATA_DIR / "strategy_config.json"
 CIRCUIT_PATH = DATA_DIR / "circuit_breaker.json"
+SUBMISSION_CONFIG_PATH = PROJECT_ROOT / "submission" / "strategy_config_snapshot.json"
 
 STARTING_BALANCE    = 10_000.0
 MAX_DAILY_LOSS_USD  = 300.0     # circuit breaker trips at -$300/day
@@ -131,6 +132,15 @@ ADJUSTMENT_INTERVAL = 5
 def load_config() -> dict:
     CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
     if not CONFIG_PATH.exists():
+        if SUBMISSION_CONFIG_PATH.exists():
+            try:
+                config = json.loads(
+                    SUBMISSION_CONFIG_PATH.read_text(encoding="utf-8-sig")
+                )
+                save_config(config)
+                return config
+            except (OSError, ValueError, TypeError) as exc:
+                print(f"[fallback] Could not restore config snapshot: {exc}")
         save_config(DEFAULT_CONFIG)
         return DEFAULT_CONFIG.copy()
     try:

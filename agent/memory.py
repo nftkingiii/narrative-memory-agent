@@ -15,6 +15,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).parent.parent
 DATA_DIR = Path(os.getenv("DATA_DIR", PROJECT_ROOT / "data"))
 DB_PATH = DATA_DIR / "memory.db"
+SUBMISSION_TRADES_PATH = PROJECT_ROOT / "submission" / "live_trades_snapshot.json"
 
 
 # ─────────────────────────────────────────────
@@ -245,6 +246,75 @@ def _migrate_trade_log(conn: sqlite3.Connection):
     conn.commit()
 
 
+def _restore_submission_trades_if_empty(conn: sqlite3.Connection):
+    """Restore public paper-trading evidence after an empty ephemeral redeploy."""
+    trade_count = conn.execute("SELECT COUNT(*) FROM trade_log").fetchone()[0]
+    if trade_count or not SUBMISSION_TRADES_PATH.exists():
+        return
+    try:
+        trades = json.loads(SUBMISSION_TRADES_PATH.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError, TypeError) as exc:
+        print(f"[memory] Could not read submission trade snapshot: {exc}")
+        return
+
+    now = datetime.now(timezone.utc).isoformat()
+    restored = 0
+    for trade in trades:
+        try:
+            conn.execute("""
+                INSERT OR IGNORE INTO trade_log (
+                    id, narrative_tag, memory_id, entry_date, exit_date,
+                    symbol, side, entry_price, exit_price, position_size,
+                    pnl_pct, current_price, unrealized_pnl_pct,
+                    stop_loss_price, take_profit_price, initial_risk_pct,
+                    last_price_at, trade_type, exit_reason, memory_informed,
+                    status, notes, created_at, updated_at
+                ) VALUES (
+                    :id, :narrative_tag, :memory_id, :entry_date, :exit_date,
+                    :symbol, :side, :entry_price, :exit_price, :position_size,
+                    :pnl_pct, :current_price, :unrealized_pnl_pct,
+                    :stop_loss_price, :take_profit_price, :initial_risk_pct,
+                    :last_price_at, :trade_type, :exit_reason, :memory_informed,
+                    :status, :notes, :created_at, :updated_at
+                )
+            """, {
+                "id": trade.get("id"),
+                "narrative_tag": trade.get("narrative_tag"),
+                "memory_id": trade.get("memory_id"),
+                "entry_date": trade.get("entry_date") or now,
+                "exit_date": trade.get("exit_date"),
+                "symbol": trade.get("symbol"),
+                "side": trade.get("side") or "long",
+                "entry_price": trade.get("entry_price"),
+                "exit_price": trade.get("exit_price"),
+                "position_size": trade.get("position_size") or "small",
+                "pnl_pct": trade.get("pnl_pct"),
+                "current_price": trade.get("current_price") or trade.get("entry_price"),
+                "unrealized_pnl_pct": trade.get("unrealized_pnl_pct") or 0,
+                "stop_loss_price": trade.get("stop_loss_price"),
+                "take_profit_price": trade.get("take_profit_price"),
+                "initial_risk_pct": trade.get("initial_risk_pct") or 3.0,
+                "last_price_at": trade.get("last_price_at") or trade.get("updated_at") or now,
+                "trade_type": trade.get("trade_type") or (
+                    "fallback"
+                    if str(trade.get("narrative_tag", "")).startswith("fallback_")
+                    else "narrative"
+                ),
+                "exit_reason": trade.get("exit_reason"),
+                "memory_informed": int(trade.get("memory_informed") or 0),
+                "status": trade.get("status") or "closed",
+                "notes": trade.get("notes") or "",
+                "created_at": trade.get("created_at") or trade.get("entry_date") or now,
+                "updated_at": trade.get("updated_at") or now,
+            })
+            restored += 1
+        except sqlite3.Error as exc:
+            print(f"[memory] Could not restore trade {trade.get('id')}: {exc}")
+    conn.commit()
+    if restored:
+        print(f"[memory] Restored {restored} trade(s) from submission snapshot")
+
+
 def init_db():
     """Create tables and seed historical data if DB is empty."""
     conn = get_connection()
@@ -278,6 +348,7 @@ def init_db():
     else:
         print(f"[memory] DB already has {count} narrative records")
 
+    _restore_submission_trades_if_empty(conn)
     conn.close()
 
 

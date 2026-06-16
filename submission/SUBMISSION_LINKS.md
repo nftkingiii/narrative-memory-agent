@@ -10,7 +10,7 @@
 - Live agent logs JSON: https://narrative-memory-agent.up.railway.app/api/logs
 
 
-## Current Snapshot
+## Current Snapshot as at submission
 
 - Total trades: 14
 - Closed trades: 13

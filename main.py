@@ -105,10 +105,14 @@ STATE_PATH = DATA_DIR / "agent_state.json"
 
 def restore_state():
     """Restore cycle and narrative timing state after a restart."""
-    if not STATE_PATH.exists():
-        return
+    source = STATE_PATH
+    if not source.exists():
+        snapshot = PROJECT_ROOT / "submission" / "agent_state_snapshot.json"
+        if not snapshot.exists():
+            return
+        source = snapshot
     try:
-        saved = json.loads(STATE_PATH.read_text(encoding="utf-8"))
+        saved = json.loads(source.read_text(encoding="utf-8-sig"))
         for key in (
             "cycle_count",
             "active_narrative",

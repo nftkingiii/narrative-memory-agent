@@ -16,6 +16,7 @@ PROJECT_ROOT = Path(__file__).parent.parent
 DATA_DIR = Path(os.getenv("DATA_DIR", PROJECT_ROOT / "data"))
 DB_PATH = DATA_DIR / "memory.db"
 SUBMISSION_TRADES_PATH = PROJECT_ROOT / "submission" / "live_trades_snapshot.json"
+SUBMISSION_NARRATIVES_PATH = PROJECT_ROOT / "submission" / "narratives_snapshot.json"
 
 
 # ─────────────────────────────────────────────
@@ -246,6 +247,45 @@ def _migrate_trade_log(conn: sqlite3.Connection):
     conn.commit()
 
 
+def _restore_submission_narratives_if_empty(conn: sqlite3.Connection) -> int:
+    """Restore narrative memory only when a deployment starts with no memory."""
+    count = conn.execute("SELECT COUNT(*) FROM narrative_memory").fetchone()[0]
+    if count or not SUBMISSION_NARRATIVES_PATH.exists():
+        return 0
+    try:
+        narratives = json.loads(
+            SUBMISSION_NARRATIVES_PATH.read_text(encoding="utf-8-sig")
+        )
+    except (OSError, ValueError, TypeError) as exc:
+        print(f"[memory] Could not read narrative snapshot: {exc}")
+        return 0
+
+    restored = 0
+    for narrative in narratives:
+        try:
+            conn.execute("""
+                INSERT OR REPLACE INTO narrative_memory (
+                    id, narrative_tag, first_detected, peak_date, days_to_peak,
+                    optimal_entry_day, avg_return_pct, sentiment_at_detection,
+                    news_volume_at_detection, funding_rate_at_detection,
+                    fear_greed_at_detection, btc_dominance_at_detection,
+                    outcome, confidence_score, notes, created_at, updated_at
+                ) VALUES (
+                    :id, :narrative_tag, :first_detected, :peak_date, :days_to_peak,
+                    :optimal_entry_day, :avg_return_pct, :sentiment_at_detection,
+                    :news_volume_at_detection, :funding_rate_at_detection,
+                    :fear_greed_at_detection, :btc_dominance_at_detection,
+                    :outcome, :confidence_score, :notes, :created_at, :updated_at
+                )
+            """, narrative)
+            restored += 1
+        except sqlite3.Error as exc:
+            print(f"[memory] Could not restore narrative {narrative.get('id')}: {exc}")
+    conn.commit()
+    if restored:
+        print(f"[memory] Restored {restored} narrative record(s) from snapshot")
+    return restored
+
 def _restore_submission_trades_if_empty(conn: sqlite3.Connection):
     """Restore public paper-trading evidence after an empty ephemeral redeploy."""
     trade_count = conn.execute("SELECT COUNT(*) FROM trade_log").fetchone()[0]
@@ -322,29 +362,30 @@ def init_db():
     _migrate_trade_log(conn)
     conn.commit()
 
-    # Only seed if empty
     count = conn.execute("SELECT COUNT(*) FROM narrative_memory").fetchone()[0]
     if count == 0:
-        print("[memory] Seeding historical narrative data...")
-        now = datetime.now(timezone.utc).isoformat()
-        for n in SEED_NARRATIVES:
-            conn.execute("""
-                INSERT INTO narrative_memory (
-                    narrative_tag, first_detected, peak_date, days_to_peak,
-                    optimal_entry_day, avg_return_pct, sentiment_at_detection,
-                    news_volume_at_detection, funding_rate_at_detection,
-                    fear_greed_at_detection, btc_dominance_at_detection,
-                    outcome, confidence_score, notes, created_at, updated_at
-                ) VALUES (
-                    :narrative_tag, :first_detected, :peak_date, :days_to_peak,
-                    :optimal_entry_day, :avg_return_pct, :sentiment_at_detection,
-                    :news_volume_at_detection, :funding_rate_at_detection,
-                    :fear_greed_at_detection, :btc_dominance_at_detection,
-                    :outcome, :confidence_score, :notes, :created_at, :updated_at
-                )
-            """, {**n, "created_at": now, "updated_at": now})
-        conn.commit()
-        print(f"[memory] Seeded {len(SEED_NARRATIVES)} historical narratives")
+        restored = _restore_submission_narratives_if_empty(conn)
+        if not restored:
+            print("[memory] Seeding historical narrative data...")
+            now = datetime.now(timezone.utc).isoformat()
+            for n in SEED_NARRATIVES:
+                conn.execute("""
+                    INSERT INTO narrative_memory (
+                        narrative_tag, first_detected, peak_date, days_to_peak,
+                        optimal_entry_day, avg_return_pct, sentiment_at_detection,
+                        news_volume_at_detection, funding_rate_at_detection,
+                        fear_greed_at_detection, btc_dominance_at_detection,
+                        outcome, confidence_score, notes, created_at, updated_at
+                    ) VALUES (
+                        :narrative_tag, :first_detected, :peak_date, :days_to_peak,
+                        :optimal_entry_day, :avg_return_pct, :sentiment_at_detection,
+                        :news_volume_at_detection, :funding_rate_at_detection,
+                        :fear_greed_at_detection, :btc_dominance_at_detection,
+                        :outcome, :confidence_score, :notes, :created_at, :updated_at
+                    )
+                """, {**n, "created_at": now, "updated_at": now})
+            conn.commit()
+            print(f"[memory] Seeded {len(SEED_NARRATIVES)} historical narratives")
     else:
         print(f"[memory] DB already has {count} narrative records")
 

@@ -199,6 +199,18 @@ def monitor_open_positions(close_trade_fn=None) -> list[dict]:
                 if raised_stop > stop_price:
                     stop_price = round(raised_stop, 8)
                     update_trade_stop(trade["id"], stop_price)
+            elif side == "short" and initial_risk_pct > 0:
+                lowered_stop = stop_price
+                if pnl_pct >= initial_risk_pct:
+                    lowered_stop = min(lowered_stop, entry_price)
+                if pnl_pct >= initial_risk_pct * 1.5:
+                    lowered_stop = min(
+                        lowered_stop,
+                        current_price * (1 + initial_risk_pct / 100),
+                    )
+                if lowered_stop < stop_price:
+                    stop_price = round(lowered_stop, 8)
+                    update_trade_stop(trade["id"], stop_price)
 
         if side == "long":
             if stop_price is not None and current_price <= stop_price:

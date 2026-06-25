@@ -1,14 +1,9 @@
 """
-fallback.py — Narrative Memory Agent (v2)
-Upgraded fallback strategy with RUNECLAW-inspired risk gates.
+fallback.py - Narrative Memory Agent fallback strategy v4.
 
-New additions:
-  - Funding rate gate (no longs when funding > 0.05%)
-  - Taker buy ratio confirmation (must show buy pressure)
-  - R:R minimum enforcement (1.2x minimum)
-  - Circuit breaker (stops trading after daily drawdown threshold)
-  - Cooldown between trades (300s minimum)
-  - Max exposure cap (80% of portfolio)
+Scans established crypto markets in both directions using multi-timeframe
+momentum, asset-relative volume, breakouts/breakdowns, taker flow, funding,
+volatility-aware exits, and adaptive paper-trade learning.
 """
 
 import json
@@ -53,7 +48,7 @@ ELIGIBLE_BASE_ASSETS = {
 # ─────────────────────────────────────────────
 
 DEFAULT_CONFIG = {
-    "strategy_version": 3,
+    "strategy_version": 4,
     "rules": {
         "momentum_long": {
             "enabled": True,
@@ -61,6 +56,20 @@ DEFAULT_CONFIG = {
             "max_change_24h_pct": 12.0,
             "min_change_1h_pct": 0.15,
             "min_change_4h_pct": 0.75,
+            "min_volume_usd": 10_000_000,
+            "min_volume_ratio": 1.2,
+            "atr_stop_multiplier": 1.6,
+            "reward_risk_ratio": 2.0,
+            "position_size": "small",
+            "trades": 0, "wins": 0, "losses": 0,
+            "win_rate": 0.0, "last_adjusted": None,
+        },
+        "momentum_short": {
+            "enabled": True,
+            "min_change_24h_pct": -12.0,
+            "max_change_24h_pct": -2.0,
+            "max_change_1h_pct": -0.15,
+            "max_change_4h_pct": -0.75,
             "min_volume_usd": 10_000_000,
             "min_volume_ratio": 1.2,
             "atr_stop_multiplier": 1.6,
@@ -138,11 +147,10 @@ def load_config() -> dict:
                     SUBMISSION_CONFIG_PATH.read_text(encoding="utf-8-sig")
                 )
                 save_config(config)
-                return config
             except (OSError, ValueError, TypeError) as exc:
                 print(f"[fallback] Could not restore config snapshot: {exc}")
-        save_config(DEFAULT_CONFIG)
-        return DEFAULT_CONFIG.copy()
+        if not CONFIG_PATH.exists():
+            save_config(DEFAULT_CONFIG)
     try:
         with open(CONFIG_PATH) as f:
             config = json.load(f)
@@ -153,7 +161,7 @@ def load_config() -> dict:
             else:
                 for key, value in defaults.items():
                     if (
-                        previous_version < DEFAULT_CONFIG["strategy_version"]
+                        previous_version < 3
                         and key not in {
                             "trades", "wins", "losses", "win_rate",
                             "last_adjusted",
@@ -290,6 +298,7 @@ def enrich_market_history(market: dict) -> dict | None:
     prior_volumes = [candle["volume_usdt"] for candle in completed[-21:-1]]
     average_volume = sum(prior_volumes) / len(prior_volumes) if prior_volumes else 0
     previous_high = max(candle["high"] for candle in completed[-21:-1])
+    previous_low = min(candle["low"] for candle in completed[-21:-1])
     latest = completed[-1]
 
     market.update({
@@ -302,7 +311,9 @@ def enrich_market_history(market: dict) -> dict | None:
         ),
         "atr_pct": _atr_pct(completed),
         "positive_1h_candle": latest["close"] > latest["open"],
+        "negative_1h_candle": latest["close"] < latest["open"],
         "breakout_20h": latest["close"] >= previous_high * 0.995,
+        "breakdown_20h": latest["close"] <= previous_low * 1.005,
     })
     return market
 
@@ -364,6 +375,7 @@ class FallbackSignal:
     position_size: str
     score: float
     reason: str
+    side: str = "long"
     rr_ratio: float = 0.0
     taker_buy_ratio: float | None = None
     funding_rate: float | None = None
@@ -564,6 +576,54 @@ def evaluate_momentum_long(markets: list[dict], config: dict) -> list[FallbackSi
     return signals
 
 
+def evaluate_momentum_short(markets: list[dict], config: dict) -> list[FallbackSignal]:
+    """Short confirmed downside momentum without chasing capitulation."""
+    rule = config["rules"]["momentum_short"]
+    if not rule["enabled"]:
+        return []
+    signals = []
+    for m in markets:
+        change, volume = m["change_24h"], m["volume_usdt"]
+        if not (rule["min_change_24h_pct"] <= change <= rule["max_change_24h_pct"]):
+            continue
+        if volume < rule["min_volume_usd"]:
+            continue
+        if m["change_1h"] > rule["max_change_1h_pct"]:
+            continue
+        if m["change_4h"] > rule["max_change_4h_pct"]:
+            continue
+        if m["ema_fast"] >= m["ema_slow"]:
+            continue
+        if m["volume_ratio"] < rule["min_volume_ratio"]:
+            continue
+        if not m["negative_1h_candle"] or not m["breakdown_20h"]:
+            continue
+        stop_pct, target_pct, rr = risk_parameters(m, rule)
+        rr_ok, _ = check_rr(target_pct, stop_pct)
+        if not rr_ok:
+            continue
+        score = min(
+            0.92,
+            0.42
+            + min(abs(m["change_4h"]) / 8, 0.20)
+            + min((m["volume_ratio"] - 1) / 4, 0.20)
+            + 0.10,
+        )
+        signals.append(FallbackSignal(
+            rule="momentum_short", symbol=m["symbol"], side="short",
+            last_price=m["last_price"], change_24h=change,
+            volume_usdt=volume, take_profit_pct=target_pct,
+            stop_loss_pct=stop_pct,
+            position_size=position_size_for_signal(score, stop_pct),
+            score=round(score, 3), rr_ratio=rr,
+            reason=(
+                f"Trend short: 24h={change:+.1f}%, 4h={m['change_4h']:+.1f}%, "
+                f"volume={m['volume_ratio']:.1f}x, 20h breakdown, "
+                f"ATR={m['atr_pct']:.1f}%, R:R={rr:.1f}x"
+            ),
+        ))
+    return signals
+
 def evaluate_fear_bounce(markets: list[dict], config: dict,
                          fear_greed: float = None) -> list[FallbackSignal]:
     rule = config["rules"]["fear_bounce"]
@@ -723,14 +783,16 @@ def enrich_with_gates(signal: FallbackSignal) -> FallbackSignal | None:
     """
     notes = []
 
-    # Funding rate gate — don't long into overleveraged bulls
     funding = fetch_funding_rate(signal.symbol)
     signal.funding_rate = funding
     if funding is not None:
-        if funding > MAX_FUNDING_RATE:
-            print(f"[fallback] {signal.symbol} BLOCKED — funding rate {funding:.4%} > {MAX_FUNDING_RATE:.4%}")
+        if signal.side == "long" and funding > MAX_FUNDING_RATE:
+            print(f"[fallback] {signal.symbol} LONG BLOCKED - funding {funding:.4%}")
             return None
-        notes.append(f"funding={funding:.4%} OK")
+        if signal.side == "short" and funding < -MAX_FUNDING_RATE:
+            print(f"[fallback] {signal.symbol} SHORT BLOCKED - funding {funding:.4%}")
+            return None
+        notes.append(f"funding={funding:.4%} OK for {signal.side}")
     else:
         notes.append("funding=n/a")
 
@@ -794,6 +856,17 @@ def select_best_signal(signals: list[FallbackSignal], config: dict,
 # Main Fallback Scan
 # ─────────────────────────────────────────────
 
+def classify_market_regime(markets: list[dict]) -> str:
+    """Classify broad risk direction from BTC's 4h trend and EMA structure."""
+    btc = next((market for market in markets if market["symbol"] == "BTCUSDT"), None)
+    if not btc:
+        return "neutral"
+    if btc["ema_fast"] < btc["ema_slow"] and btc["change_4h"] < 0:
+        return "bearish"
+    if btc["ema_fast"] > btc["ema_slow"] and btc["change_4h"] > 0:
+        return "bullish"
+    return "neutral"
+
 def run_fallback_scan(fear_greed: float = None, open_trades: list = None,
                       portfolio_balance: float = STARTING_BALANCE) -> FallbackSignal | None:
     """
@@ -846,14 +919,20 @@ def run_fallback_scan(fear_greed: float = None, open_trades: list = None,
               f"vol=${m['volume_usdt']/1e6:.1f}M book={m['book_ratio']:.2f}")
 
     # ── Evaluate Rules ────────────────────────
+    market_regime = classify_market_regime(markets)
+    print(f"[fallback] BTC market regime: {market_regime}")
     all_signals = []
-    all_signals += evaluate_momentum_long(markets, config)
-    all_signals += evaluate_fear_bounce(markets, config, fear_greed)
-    all_signals += evaluate_volume_breakout(markets, config)
-    all_signals += evaluate_taker_momentum(markets, config)
+    if market_regime != "bearish":
+        all_signals += evaluate_momentum_long(markets, config)
+        all_signals += evaluate_fear_bounce(markets, config, fear_greed)
+        all_signals += evaluate_volume_breakout(markets, config)
+        all_signals += evaluate_taker_momentum(markets, config)
+    if market_regime != "bullish":
+        all_signals += evaluate_momentum_short(markets, config)
 
     print(f"[fallback] Signals before gates: {len(all_signals)} "
-          f"({sum(1 for s in all_signals if s.rule=='momentum_long')} momentum, "
+          f"({sum(1 for s in all_signals if s.rule=='momentum_long')} long_momentum, "
+          f"{sum(1 for s in all_signals if s.rule=='momentum_short')} short_momentum, "
           f"{sum(1 for s in all_signals if s.rule=='fear_bounce')} fear_bounce, "
           f"{sum(1 for s in all_signals if s.rule=='volume_breakout')} vol_breakout, "
           f"{sum(1 for s in all_signals if s.rule=='taker_momentum')} taker_momentum)")
@@ -1003,6 +1082,11 @@ def _adjust_thresholds(rule: str, rule_cfg: dict):
         elif win_rate > 0.60:
             rule_cfg["min_change_24h_pct"] = round(max(2.0, rule_cfg["min_change_24h_pct"] - 0.5), 1)
             print(f"  Loosening momentum threshold to {rule_cfg['min_change_24h_pct']}%")
+    elif rule == "momentum_short":
+        if win_rate < 0.40:
+            rule_cfg["max_change_24h_pct"] = round(max(-5.0, rule_cfg["max_change_24h_pct"] - 0.5), 1)
+        elif win_rate > 0.60:
+            rule_cfg["max_change_24h_pct"] = round(min(-1.5, rule_cfg["max_change_24h_pct"] + 0.5), 1)
     elif rule == "fear_bounce":
         if win_rate < 0.40:
             rule_cfg["max_fear_greed"] = max(20, rule_cfg["max_fear_greed"] - 5)
@@ -1026,7 +1110,7 @@ def _adjust_thresholds(rule: str, rule_cfg: dict):
 
 if __name__ == "__main__":
     print("=" * 55)
-    print("FALLBACK STRATEGY v2 TEST")
+    print("FALLBACK STRATEGY v4 TEST")
     print("=" * 55)
 
     signal = run_fallback_scan(fear_greed=45)

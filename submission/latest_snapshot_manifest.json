@@ -1,0 +1,12 @@
+﻿{
+    "captured_at_utc":  "2026-06-25T15:34:52.4312973Z",
+    "source":  "https://narrative-memory-agent.up.railway.app",
+    "total_trades":  26,
+    "open_trades":  0,
+    "closed_trades":  26,
+    "cycle_count":  211,
+    "strategy_version":  3,
+    "processed_trade_ids":  23,
+    "current_balance":  9902.29,
+    "total_return_pct":  -0.98
+}

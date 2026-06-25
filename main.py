@@ -212,8 +212,31 @@ def run_cycle():
 
             if STATE.last_decision and STATE.last_decision.should_enter:
                 d = STATE.last_decision
+                try:
+                    market_change = float(
+                        snapshot.get("market_intel", {}).get("market_cap_change_24h")
+                    )
+                    fear_greed = float(
+                        snapshot.get("sentiment", {}).get("fear_greed_value")
+                    )
+                except (TypeError, ValueError):
+                    market_change = None
+                    fear_greed = None
+                if (
+                    d.side == "long"
+                    and market_change is not None
+                    and fear_greed is not None
+                    and market_change <= -2.0
+                    and fear_greed <= 30
+                ):
+                    log.info(
+                        f"  Narrative long deferred: broad market {market_change:.1f}% "
+                        f"with F&G={fear_greed:.0f}"
+                    )
+                    STATE.last_decision = None
+                    d = None
                 # Skip if already in this symbol
-                if d.symbol in open_symbols:
+                if d and d.symbol in open_symbols:
                     log.info(f"  Already have open position in {d.symbol} — skipping")
                     STATE.last_decision = None
                     d = None
@@ -300,17 +323,25 @@ def run_cycle():
             # Execute fallback strategy signal
             log.info(f"  Executing fallback: {fallback_signal.symbol} | {fallback_signal.rule}")
             current_price = fallback_signal.last_price
-            stop_loss_price = round(
-                current_price * (1 - fallback_signal.stop_loss_pct / 100), 8
-            )
-            take_profit_price = round(
-                current_price * (1 + fallback_signal.take_profit_pct / 100), 8
-            )
+            if fallback_signal.side == "short":
+                stop_loss_price = round(
+                    current_price * (1 + fallback_signal.stop_loss_pct / 100), 8
+                )
+                take_profit_price = round(
+                    current_price * (1 - fallback_signal.take_profit_pct / 100), 8
+                )
+            else:
+                stop_loss_price = round(
+                    current_price * (1 - fallback_signal.stop_loss_pct / 100), 8
+                )
+                take_profit_price = round(
+                    current_price * (1 + fallback_signal.take_profit_pct / 100), 8
+                )
 
             trade_id = log_trade(
                 narrative_tag=f"fallback_{fallback_signal.rule}",
                 symbol=fallback_signal.symbol,
-                side="long",
+                side=fallback_signal.side,
                 entry_price=current_price,
                 position_size=fallback_signal.position_size,
                 memory_informed=False,
@@ -322,7 +353,7 @@ def run_cycle():
             )
             record_fallback_entry()
             log.info(
-                f"  Fallback trade logged: {fallback_signal.symbol} @ "
+                f"  Fallback trade logged: {fallback_signal.symbol} {fallback_signal.side} @ "
                 f"{current_price} (id={trade_id})"
             )
         elif not (STATE.last_decision and STATE.last_decision.should_enter):

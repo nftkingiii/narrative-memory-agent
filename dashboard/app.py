@@ -1045,7 +1045,8 @@ function renderRules(config) {
   const rows = Object.entries(config.rules).map(([name,r]) => {
     const wr = r.win_rate ?? 0; const wrPct = (wr*100).toFixed(1);
     const wrColor = wr>0.55?'var(--green2)':wr<0.40?'var(--red2)':'var(--amber2)';
-    const v3Thresh = name==='momentum_long' ? `${r.min_change_24h_pct}% to ${r.max_change_24h_pct}% daily, ${r.min_volume_ratio}x own volume`
+    const ruleThresh = name==='momentum_long' ? `${r.min_change_24h_pct}% to ${r.max_change_24h_pct}% daily, ${r.min_volume_ratio}x own volume`
+                   : name==='momentum_short' ? `${r.min_change_24h_pct}% to ${r.max_change_24h_pct}% daily, 20h downside breakdown`
                    : name==='fear_bounce' ? `${r.min_change_24h_pct}% to ${r.max_change_24h_pct}% daily, F&G <${r.max_fear_greed}`
                    : name==='volume_breakout' ? `20h high, ${r.volume_vs_avg_multiplier}x own volume`
                    : `${r.min_change_24h_pct}% to ${r.max_change_24h_pct}% daily, taker >${((r.min_taker_buy_ratio||0)*100).toFixed(0)}%`;
@@ -1054,7 +1055,7 @@ function renderRules(config) {
     return `<div class="rule-row">
       <div class="rule-left">
         <div class="rule-name">${name.replace(/_/g,' ')}</div>
-        <div class="rule-thresh">${v3Thresh}</div>
+        <div class="rule-thresh">${ruleThresh}</div>
         <div class="prog-bar" style="width:140px;"><div class="prog-fill" style="width:${prog}%"></div></div>
       </div>
       <div class="rule-right">

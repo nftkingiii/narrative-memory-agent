@@ -41,7 +41,7 @@ News + sentiment + market data
 Spot tickers + 1h candles         |
               |                   |
               v                   v
-       Fallback V3 scanner --> Paper execution
+       Fallback V4 scanner --> Paper execution
                                   |
                                   v
                       Live marks, exits, learning
@@ -50,13 +50,13 @@ Spot tickers + 1h candles         |
                          SQLite + dashboard
 ```
 
-## Fallback Strategy V3
+## Fallback Strategy V4
 
 The fallback strategy scans the top 20 eligible USDT spot markets by volume.
 It uses an allowlist of established crypto assets to exclude stablecoins,
 leveraged products, tokenized equities, and newly listed noise.
 
-Each candidate receives 50 one-hour candles. These are used to calculate:
+Each candidate receives 50 one-hour candles. BTC's 4-hour trend and EMA structure classify the broad market as bullish, bearish, or neutral; bearish regimes suppress new longs, bullish regimes suppress shorts, and neutral regimes allow both sides. These candles are also used to calculate:
 
 - 1-hour and 4-hour returns;
 - 8-period and 21-period EMAs;
@@ -77,6 +77,21 @@ Requires:
 
 The upper return bound is intended to avoid chasing assets after extreme daily
 spikes.
+
+### Momentum Short
+
+Requires:
+
+- 24-hour return between -12% and -2%;
+- negative 1-hour and 4-hour momentum;
+- EMA 8 below EMA 21;
+- a confirmed breakdown below the rolling 20-hour low;
+- volume at least 1.2 times the asset's own rolling average;
+- funding that is not already excessively negative.
+
+Short stops sit above entry and targets below entry. The same ATR, reward-to-risk,
+breakeven, trailing-stop, exposure, and cooldown controls used for longs apply
+symmetrically to shorts.
 
 ### Confirmed Fear Bounce
 
